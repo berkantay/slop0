@@ -1,0 +1,5 @@
+slop0
+*.yaml
+!.slop0.yaml.example
+.agents/
+.claude/
