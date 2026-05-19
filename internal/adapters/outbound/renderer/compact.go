@@ -186,7 +186,7 @@ func (r *CompactRenderer) renderDesignPatterns(b *strings.Builder, patterns []do
 		grouped[p.Name] = append(grouped[p.Name], p)
 	}
 
-	order := []string{"port-adapter", "strategy", "factory", "middleware", "decorator", "builder", "singleton"}
+	order := []string{"interface-boundary", "strategy", "factory", "middleware", "decorator", "builder", "singleton"}
 	for _, name := range order {
 		group, ok := grouped[name]
 		if !ok {

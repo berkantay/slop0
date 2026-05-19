@@ -89,7 +89,7 @@ func matchPortAdaptersInPkg(pkg *domain.Package, ifacePkgs map[string]string) []
 				continue
 			}
 			detected = append(detected, DetectedPattern{
-				Name:        "port-adapter",
+				Name:        "interface-boundary",
 				Description: fmt.Sprintf("%s.%s implements %s.%s", domain.ShortPkgName(pkg.Path), t.Name, domain.ShortPkgName(ifacePkg), ifaceName),
 				Participants: []PatternParticipant{
 					{Role: "port", Type: ifaceName, Package: ifacePkg},

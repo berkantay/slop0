@@ -1,6 +1,10 @@
 package rules
 
-import "github.com/berkantay/slop0/internal/domain"
+import (
+	"strings"
+
+	"github.com/berkantay/slop0/internal/domain"
+)
 
 type Engine struct {
 	circular    *CircularDetector
@@ -21,7 +25,10 @@ type Engine struct {
 	hotspots    *HotspotAnalyzer
 	dataflow    *DataFlowTracer
 	summary     *SummaryGenerator
-	untypedMap  *UntypedMapDetector
+	untypedMap       *UntypedMapDetector
+	pyEntryPoints    *PythonEntryPointDetector
+	pyIdiom          *PythonIdiomDetector
+	pyBoundaries     *PythonBoundaryDetector
 }
 
 func NewEngine() *Engine {
@@ -44,7 +51,10 @@ func NewEngine() *Engine {
 		hotspots:    &HotspotAnalyzer{},
 		dataflow:    &DataFlowTracer{},
 		summary:     &SummaryGenerator{},
-		untypedMap:  &UntypedMapDetector{},
+		untypedMap:       &UntypedMapDetector{},
+		pyEntryPoints:    NewPythonEntryPointDetector(),
+		pyIdiom:          NewPythonIdiomDetector(),
+		pyBoundaries:     &PythonBoundaryDetector{},
 	}
 }
 
@@ -104,21 +114,44 @@ func (e *Engine) runPatternChecks(pkgs []domain.Package, thresholds domain.Thres
 		report.DesignPatterns = e.confidence.ScorePatterns(designPatterns, pkgs)
 	}
 
+	report.PatternIssues = append(report.PatternIssues, e.pyIdiom.Detect(pkgs)...)
+
 	report.PatternIssues = e.confidence.ScoreIssues(report.PatternIssues, pkgs)
 }
 
 func (e *Engine) runScoringAndMetrics(pkgs []domain.Package, cache *PkgCache, report *domain.Report) {
 	report.PkgMetrics = e.pkgMetrics.Calculate(pkgs)
 
-	typedPkgs, typedFset := cache.Typed()
-	report.TypeMetrics = e.typeRoles.ClassifyFromLoaded(pkgs, typedPkgs, typedFset)
-	report.EntryPoints = e.entryPoints.DetectFromLoaded(typedPkgs, typedFset)
+	isPython := isPythonProject(pkgs)
 
-	if extDeps, err := e.boundaries.Detect(pkgs); err == nil {
-		report.ExternalDeps = extDeps
+	if !isPython {
+		typedPkgs, typedFset := cache.Typed()
+		report.TypeMetrics = e.typeRoles.ClassifyFromLoaded(pkgs, typedPkgs, typedFset)
+		report.EntryPoints = e.entryPoints.DetectFromLoaded(typedPkgs, typedFset)
+	} else {
+		report.EntryPoints = e.pyEntryPoints.Detect(pkgs)
+	}
+
+	if !isPython {
+		if extDeps, err := e.boundaries.Detect(pkgs); err == nil {
+			report.ExternalDeps = extDeps
+		}
+	} else {
+		report.ExternalDeps = e.pyBoundaries.Detect(pkgs)
 	}
 
 	report.Hotspots = e.hotspots.Analyze(pkgs)
 	report.DataFlows = e.dataflow.Trace(pkgs, report.EntryPoints, report.ExternalDeps)
 	report.Summary = e.summary.Generate(report, pkgs)
+}
+
+func isPythonProject(pkgs []domain.Package) bool {
+	for _, pkg := range pkgs {
+		for _, fn := range pkg.Functions {
+			if strings.HasSuffix(fn.File, ".py") {
+				return true
+			}
+		}
+	}
+	return false
 }

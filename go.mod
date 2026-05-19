@@ -3,6 +3,7 @@ module github.com/berkantay/slop0
 go 1.25.3
 
 require (
+	github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/tools v0.45.0
 	gopkg.in/yaml.v3 v3.0.1

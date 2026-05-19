@@ -162,7 +162,7 @@ func concreteReturnSignals(issue domain.PatternIssue) []float64 {
 
 func (s *ConfidenceScorer) scorePattern(p domain.DesignPattern, usageSites map[string]bool, ifaceMethodCounts map[string]int) domain.Confidence {
 	switch p.Name {
-	case "port-adapter":
+	case "interface-boundary":
 		return s.scorePortAdapter(p, usageSites, ifaceMethodCounts)
 	case "strategy":
 		return s.scoreStrategy(p)

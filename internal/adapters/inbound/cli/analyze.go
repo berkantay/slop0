@@ -47,6 +47,10 @@ func (f *analyzeFlags) toOpts(args []string) inbound.AnalyzeOpts {
 }
 
 func newAnalyzeCommand(analyzer inbound.AnalyzePort, renderers map[string]outbound.RendererPort) *cobra.Command {
+	return newAnalyzeCommandWithLang(func(_ string) inbound.AnalyzePort { return analyzer }, renderers, nil)
+}
+
+func newAnalyzeCommandWithLang(builder AnalyzerBuilder, renderers map[string]outbound.RendererPort, langPtr *string) *cobra.Command {
 	f := &analyzeFlags{}
 
 	cmd := &cobra.Command{
@@ -54,6 +58,16 @@ func newAnalyzeCommand(analyzer inbound.AnalyzePort, renderers map[string]outbou
 		Short: "Analyze codebase and output dependency map",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := "."
+			if len(args) > 0 {
+				dir = args[0]
+			}
+			lang := ""
+			if langPtr != nil {
+				lang = *langPtr
+			}
+			lang = resolveLang(lang, dir)
+			analyzer := builder(lang)
 			return runAnalyze(analyzer, renderers, f, args)
 		},
 	}
