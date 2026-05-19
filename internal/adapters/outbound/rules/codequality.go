@@ -299,39 +299,54 @@ func isComment(line string) bool {
 }
 
 func isNextBodyEmpty(lines []string, funcLine int) bool {
+	if isPythonEmptyBody(lines, funcLine) {
+		return true
+	}
+	return isBraceBodyEmpty(lines, funcLine)
+}
+
+func isPythonEmptyBody(lines []string, funcLine int) bool {
+	line := strings.TrimSpace(lines[funcLine])
+	if !strings.HasSuffix(line, ":") {
+		return false
+	}
+	nextIdx := funcLine + 1
+	if nextIdx >= len(lines) {
+		return false
+	}
+	next := strings.TrimSpace(lines[nextIdx])
+	return next == "pass" || next == "..." || next == ""
+}
+
+func isBraceBodyEmpty(lines []string, funcLine int) bool {
 	braceCount := 0
 	started := false
 	stmtCount := 0
 
-	for i := funcLine; i < len(lines) && i < funcLine+10; i++ {
-		line := strings.TrimSpace(lines[i])
+	end := funcLine + 10
+	if end > len(lines) {
+		end = len(lines)
+	}
 
-		if strings.Contains(line, "{") {
-			braceCount++
+	for i := funcLine; i < end; i++ {
+		line := strings.TrimSpace(lines[i])
+		braceCount += strings.Count(line, "{") - strings.Count(line, "}")
+		if !started && strings.Contains(line, "{") {
 			started = true
 		}
-		if strings.Contains(line, "}") {
-			braceCount--
-		}
-
-		if started && braceCount > 0 && line != "{" && line != "" {
+		if started && braceCount > 0 && isNonEmptyStatement(line) {
 			stmtCount++
 		}
-
 		if started && braceCount == 0 {
 			return stmtCount <= 1
-		}
-
-		if strings.HasSuffix(line, ":") && i == funcLine {
-			nextIdx := i + 1
-			if nextIdx < len(lines) {
-				next := strings.TrimSpace(lines[nextIdx])
-				return next == "pass" || next == "..." || next == ""
-			}
 		}
 	}
 
 	return false
+}
+
+func isNonEmptyStatement(line string) bool {
+	return line != "{" && line != ""
 }
 
 func countLeadingTabs(line string) int {
@@ -351,11 +366,12 @@ func countLeadingSpaces(line string) int {
 	for _, r := range line {
 		if r == ' ' {
 			count++
-		} else if unicode.IsSpace(r) {
 			continue
-		} else {
-			break
 		}
+		if unicode.IsSpace(r) {
+			continue
+		}
+		break
 	}
 	return count
 }

@@ -218,41 +218,43 @@ func detectDynamicInRootLayout(root *sitter.Node, src []byte, fname, modPath, fi
 }
 
 func detectRouteHandlerFromServer(root *sitter.Node, src []byte, fname, modPath, file string) []domain.PatternIssue {
-	if hasDirective(root, src, "use client") {
-		return nil
-	}
-	if !isAppRouterFile(file) {
+	if hasDirective(root, src, "use client") || !isAppRouterFile(file) {
 		return nil
 	}
 
 	var issues []domain.PatternIssue
 
 	walkTS(root, func(node *sitter.Node) {
-		if node.Type() != "call_expression" {
-			return
-		}
-		fn := node.ChildByFieldName("function")
-		if fn == nil {
-			return
-		}
-		name := tsNodeText(fn, src)
-		if name == "fetch" {
-			args := node.ChildByFieldName("arguments")
-			if args != nil && args.NamedChildCount() > 0 {
-				url := tsNodeText(args.NamedChild(0), src)
-				if strings.Contains(url, "/api/") {
-					issues = append(issues, domain.PatternIssue{
-						Category:  "nextjs/server-fetch-api-route",
-						Dominant:  "server component fetching own API route — call the function directly instead of HTTP roundtrip",
-						Violation: fmt.Sprintf("%s: fetch to %s", modPath, strings.Trim(url, "\"'`")),
-						Locations: []domain.Location{{File: fname, Line: int(node.StartPoint().Row) + 1}},
-					})
-				}
-			}
+		if issue, ok := checkFetchToAPIRoute(node, src, fname, modPath); ok {
+			issues = append(issues, issue)
 		}
 	})
 
 	return issues
+}
+
+func checkFetchToAPIRoute(node *sitter.Node, src []byte, fname, modPath string) (domain.PatternIssue, bool) {
+	if node.Type() != "call_expression" {
+		return domain.PatternIssue{}, false
+	}
+	fn := node.ChildByFieldName("function")
+	if fn == nil || tsNodeText(fn, src) != "fetch" {
+		return domain.PatternIssue{}, false
+	}
+	args := node.ChildByFieldName("arguments")
+	if args == nil || args.NamedChildCount() == 0 {
+		return domain.PatternIssue{}, false
+	}
+	url := tsNodeText(args.NamedChild(0), src)
+	if !strings.Contains(url, "/api/") {
+		return domain.PatternIssue{}, false
+	}
+	return domain.PatternIssue{
+		Category:  "nextjs/server-fetch-api-route",
+		Dominant:  "server component fetching own API route — call the function directly instead of HTTP roundtrip",
+		Violation: fmt.Sprintf("%s: fetch to %s", modPath, strings.Trim(url, "\"'`")),
+		Locations: []domain.Location{{File: fname, Line: int(node.StartPoint().Row) + 1}},
+	}, true
 }
 
 func detectMissingErrorBoundaries(routeDirs map[string][]string) []domain.PatternIssue {
@@ -319,45 +321,60 @@ func detectMissingMetadata(pkgs []domain.Package, parser *sitter.Parser) []domai
 	var issues []domain.PatternIssue
 
 	for _, pkg := range pkgs {
-		for _, fn := range pkg.Functions {
-			base := filepath.Base(fn.File)
-			if base != "page.tsx" && base != "page.ts" {
-				continue
-			}
-
-			src, err := os.ReadFile(fn.File)
-			if err != nil {
-				continue
-			}
-
-			tree, err := parser.ParseCtx(context.Background(), nil, src)
-			if err != nil {
-				continue
-			}
-
-			hasMetadata := false
-			walkTS(tree.RootNode(), func(node *sitter.Node) {
-				if node.Type() == "export_statement" {
-					text := tsNodeText(node, src)
-					if strings.Contains(text, "metadata") || strings.Contains(text, "generateMetadata") {
-						hasMetadata = true
-					}
-				}
-			})
-
-			if !hasMetadata {
-				issues = append(issues, domain.PatternIssue{
-					Category:  "nextjs/missing-metadata",
-					Dominant:  "page without metadata export — hurts SEO",
-					Violation: fmt.Sprintf("%s: no metadata or generateMetadata export", pkg.Path),
-					Locations: []domain.Location{{File: fn.File, Line: 1}},
-				})
-			}
-			break
+		if issue, ok := checkPkgForMissingMetadata(pkg, parser); ok {
+			issues = append(issues, issue)
 		}
 	}
 
 	return issues
+}
+
+func checkPkgForMissingMetadata(pkg domain.Package, parser *sitter.Parser) (domain.PatternIssue, bool) {
+	for _, fn := range pkg.Functions {
+		if !isPageFile(fn.File) {
+			continue
+		}
+		hasMeta, err := fileHasMetadataExport(fn.File, parser)
+		if err {
+			continue
+		}
+		if !hasMeta {
+			return domain.PatternIssue{
+				Category:  "nextjs/missing-metadata",
+				Dominant:  "page without metadata export — hurts SEO",
+				Violation: fmt.Sprintf("%s: no metadata or generateMetadata export", pkg.Path),
+				Locations: []domain.Location{{File: fn.File, Line: 1}},
+			}, true
+		}
+		break
+	}
+	return domain.PatternIssue{}, false
+}
+
+func isPageFile(file string) bool {
+	base := filepath.Base(file)
+	return base == "page.tsx" || base == "page.ts"
+}
+
+func fileHasMetadataExport(file string, parser *sitter.Parser) (bool, bool) {
+	src, readErr := os.ReadFile(file)
+	if readErr != nil {
+		return false, true
+	}
+	tree, parseErr := parser.ParseCtx(context.Background(), nil, src)
+	if parseErr != nil {
+		return false, true
+	}
+	hasMetadata := false
+	walkTS(tree.RootNode(), func(node *sitter.Node) {
+		if node.Type() == "export_statement" {
+			text := tsNodeText(node, src)
+			if strings.Contains(text, "metadata") || strings.Contains(text, "generateMetadata") {
+				hasMetadata = true
+			}
+		}
+	})
+	return hasMetadata, false
 }
 
 func collectRouteDirs(pkgs []domain.Package) map[string][]string {

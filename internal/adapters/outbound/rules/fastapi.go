@@ -149,40 +149,54 @@ func (d *FastAPIDetector) detectAsyncCallingSync(lines []string, fname, modPath 
 	for i, line := range lines {
 		if asyncDefRe.MatchString(line) {
 			inAsync = true
-			asyncIndent = len(line) - len(strings.TrimLeft(line, " \t"))
+			asyncIndent = lineIndent(line)
 			continue
 		}
-		// Detect end of async function (new def at same or lesser indent)
-		if inAsync && len(strings.TrimSpace(line)) > 0 {
-			currentIndent := len(line) - len(strings.TrimLeft(line, " \t"))
-			if currentIndent <= asyncIndent && !strings.HasPrefix(strings.TrimSpace(line), "#") && !strings.HasPrefix(strings.TrimSpace(line), "@") {
-				// Check if this is a new function/class definition
-				trimmed := strings.TrimSpace(line)
-				if strings.HasPrefix(trimmed, "def ") || strings.HasPrefix(trimmed, "async def ") || strings.HasPrefix(trimmed, "class ") {
-					inAsync = false
-				}
-			}
+		if inAsync {
+			inAsync = !isAsyncFuncEnd(line, asyncIndent)
 		}
-
 		if !inAsync {
 			continue
 		}
-
-		for _, pat := range syncBlockingCalls {
-			if pat.MatchString(line) {
-				issues = append(issues, domain.PatternIssue{
-					Category:   "fastapi",
-					Dominant:   "async-calling-sync",
-					Violation:  fmt.Sprintf("Sync blocking call in async function at %s:%d — use async alternatives or run_in_executor", fname, i+1),
-					Confidence: domain.ConfidenceHigh,
-					Locations:  []domain.Location{{File: fname, Line: i + 1}},
-				})
-				break
-			}
+		if issue, ok := matchSyncCallInAsync(line, fname, i); ok {
+			issues = append(issues, issue)
 		}
 	}
 
 	return issues
+}
+
+func lineIndent(line string) int {
+	return len(line) - len(strings.TrimLeft(line, " \t"))
+}
+
+func isAsyncFuncEnd(line string, asyncIndent int) bool {
+	trimmed := strings.TrimSpace(line)
+	if len(trimmed) == 0 {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "@") {
+		return false
+	}
+	if lineIndent(line) > asyncIndent {
+		return false
+	}
+	return strings.HasPrefix(trimmed, "def ") || strings.HasPrefix(trimmed, "async def ") || strings.HasPrefix(trimmed, "class ")
+}
+
+func matchSyncCallInAsync(line, fname string, idx int) (domain.PatternIssue, bool) {
+	for _, pat := range syncBlockingCalls {
+		if pat.MatchString(line) {
+			return domain.PatternIssue{
+				Category:   "fastapi",
+				Dominant:   "async-calling-sync",
+				Violation:  fmt.Sprintf("Sync blocking call in async function at %s:%d — use async alternatives or run_in_executor", fname, idx+1),
+				Confidence: domain.ConfidenceHigh,
+				Locations:  []domain.Location{{File: fname, Line: idx + 1}},
+			}, true
+		}
+	}
+	return domain.PatternIssue{}, false
 }
 
 // detectRawDictInput flags function params typed as dict/Dict instead of Pydantic models.

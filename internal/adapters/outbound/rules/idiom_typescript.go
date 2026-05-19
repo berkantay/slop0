@@ -130,8 +130,6 @@ func detectAsTypeAssertionOveruse(pkg domain.Package) []domain.PatternIssue {
 }
 
 func detectMissingReturnTypesOnExports(pkg domain.Package) []domain.PatternIssue {
-	var issues []domain.PatternIssue
-
 	for _, fn := range pkg.Functions {
 		if fn.File == "" {
 			continue
@@ -140,29 +138,37 @@ func detectMissingReturnTypesOnExports(pkg domain.Package) []domain.PatternIssue
 		if err != nil {
 			continue
 		}
+		return scanFileForMissingReturnTypes(src, filepath.Base(fn.File), pkg.Path)
+	}
+	return nil
+}
 
-		fname := filepath.Base(fn.File)
-		lines := strings.Split(string(src), "\n")
-		for i, line := range lines {
-			if reMissingReturnType.MatchString(line) {
-				// Check there's no colon after the closing paren before { or =>
-				afterParams := line
-				if idx := strings.LastIndex(afterParams, ")"); idx >= 0 {
-					rest := afterParams[idx+1:]
-					if !strings.Contains(rest, ":") {
-						issues = append(issues, domain.PatternIssue{
-							Category:  "style/missing-return-type",
-							Dominant:  "exported function missing explicit return type — add return type annotation",
-							Violation: fmt.Sprintf("%s: %s", domain.ShortPkgName(pkg.Path), strings.TrimSpace(line)),
-							Locations: []domain.Location{{File: fname, Line: i + 1}},
-						})
-					}
-				}
-			}
+func scanFileForMissingReturnTypes(src []byte, fname, pkgPath string) []domain.PatternIssue {
+	var issues []domain.PatternIssue
+	lines := strings.Split(string(src), "\n")
+	for i, line := range lines {
+		if !reMissingReturnType.MatchString(line) {
+			continue
 		}
-		break // one check per file from this package
+		if exportMissingReturnAnnotation(line) {
+			issues = append(issues, domain.PatternIssue{
+				Category:  "style/missing-return-type",
+				Dominant:  "exported function missing explicit return type — add return type annotation",
+				Violation: fmt.Sprintf("%s: %s", domain.ShortPkgName(pkgPath), strings.TrimSpace(line)),
+				Locations: []domain.Location{{File: fname, Line: i + 1}},
+			})
+		}
 	}
 	return issues
+}
+
+func exportMissingReturnAnnotation(line string) bool {
+	idx := strings.LastIndex(line, ")")
+	if idx < 0 {
+		return false
+	}
+	rest := line[idx+1:]
+	return !strings.Contains(rest, ":")
 }
 
 func detectEnumUsage(pkg domain.Package) []domain.PatternIssue {

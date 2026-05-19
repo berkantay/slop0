@@ -171,31 +171,51 @@ func detectCommandInjection(src []byte, fname, modPath string) []domain.PatternI
 }
 
 func detectXSSSinks(src []byte, fname, modPath, file string, parser *sitter.Parser) []domain.PatternIssue {
-	if !strings.HasSuffix(file, ".tsx") && !strings.HasSuffix(file, ".jsx") && !strings.HasSuffix(file, ".ts") && !strings.HasSuffix(file, ".js") {
+	if !isJSOrTSFile(file) {
 		return nil
 	}
 
 	var issues []domain.PatternIssue
+	issues = append(issues, detectDangerouslySetInnerHTML(src, fname, modPath, parser)...)
+	issues = append(issues, detectInnerHTMLAssignment(src, fname, modPath)...)
+	return issues
+}
 
+func isJSOrTSFile(file string) bool {
+	for _, ext := range []string{".tsx", ".jsx", ".ts", ".js"} {
+		if strings.HasSuffix(file, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+func detectDangerouslySetInnerHTML(src []byte, fname, modPath string, parser *sitter.Parser) []domain.PatternIssue {
 	tree, err := parser.ParseCtx(context.Background(), nil, src)
 	if err != nil {
 		return nil
 	}
 
+	var issues []domain.PatternIssue
 	walkTS(tree.RootNode(), func(node *sitter.Node) {
-		if node.Type() == "jsx_attribute" {
-			nameNode := node.ChildByFieldName("name")
-			if nameNode != nil && tsNodeText(nameNode, src) == "dangerouslySetInnerHTML" {
-				issues = append(issues, domain.PatternIssue{
-					Category:  "security/xss",
-					Dominant:  "dangerouslySetInnerHTML — XSS risk, sanitize input",
-					Violation: fmt.Sprintf("%s: dangerouslySetInnerHTML", modPath),
-					Locations: []domain.Location{{File: fname, Line: int(node.StartPoint().Row) + 1}},
-				})
-			}
+		if node.Type() != "jsx_attribute" {
+			return
+		}
+		nameNode := node.ChildByFieldName("name")
+		if nameNode != nil && tsNodeText(nameNode, src) == "dangerouslySetInnerHTML" {
+			issues = append(issues, domain.PatternIssue{
+				Category:  "security/xss",
+				Dominant:  "dangerouslySetInnerHTML — XSS risk, sanitize input",
+				Violation: fmt.Sprintf("%s: dangerouslySetInnerHTML", modPath),
+				Locations: []domain.Location{{File: fname, Line: int(node.StartPoint().Row) + 1}},
+			})
 		}
 	})
+	return issues
+}
 
+func detectInnerHTMLAssignment(src []byte, fname, modPath string) []domain.PatternIssue {
+	var issues []domain.PatternIssue
 	lines := strings.Split(string(src), "\n")
 	for i, line := range lines {
 		if strings.Contains(line, ".innerHTML") && strings.Contains(line, "=") {
@@ -207,7 +227,6 @@ func detectXSSSinks(src []byte, fname, modPath, file string, parser *sitter.Pars
 			})
 		}
 	}
-
 	return issues
 }
 

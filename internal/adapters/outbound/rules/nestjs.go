@@ -101,51 +101,80 @@ func (d *NestJSDetector) detectNoDTOForBody(lines []string, fname, modPath strin
 var tsMethodRe = regexp.MustCompile(`^\s+(async\s+)?\w+\(`)
 var tsClassEndRe = regexp.MustCompile(`^}`)
 
+var controllerMethodNameRe = regexp.MustCompile(`^\s+(?:async\s+)?(\w+)\(`)
+
+type methodTracker struct {
+	start      int
+	name       string
+	braceDepth int
+	active     bool
+}
+
 func (d *NestJSDetector) detectLogicInController(lines []string, fname, modPath string, file string) []domain.PatternIssue {
 	if !strings.HasSuffix(file, ".controller.ts") {
 		return nil
 	}
+	return scanControllerMethods(lines, fname)
+}
 
+func scanControllerMethods(lines []string, fname string) []domain.PatternIssue {
 	var issues []domain.PatternIssue
-	methodStart := -1
-	methodName := ""
-	braceDepth := 0
-
-	methodNameRe := regexp.MustCompile(`^\s+(?:async\s+)?(\w+)\(`)
+	var mt methodTracker
 
 	for i, line := range lines {
-		if methodStart == -1 {
-			if m := methodNameRe.FindStringSubmatch(line); m != nil {
-				// Check it's likely a method (has opening brace on this or next line)
-				if strings.Contains(line, "{") || (i+1 < len(lines) && strings.Contains(lines[i+1], "{")) {
-					methodStart = i
-					methodName = m[1]
-					braceDepth = strings.Count(line, "{") - strings.Count(line, "}")
-					continue
-				}
-			}
+		if !mt.active {
+			mt = tryStartTracking(lines, i)
+			continue
 		}
-
-		if methodStart >= 0 {
-			braceDepth += strings.Count(line, "{") - strings.Count(line, "}")
-			if braceDepth <= 0 {
-				methodLen := i - methodStart + 1
-				if methodLen > 20 {
-					issues = append(issues, domain.PatternIssue{
-						Category:   "nestjs",
-						Dominant:   "logic-in-controller",
-						Violation:  fmt.Sprintf("Controller method %s at %s:%d is %d lines — extract business logic to a service", methodName, fname, methodStart+1, methodLen),
-						Confidence: domain.ConfidenceMedium,
-						Locations:  []domain.Location{{File: fname, Line: methodStart + 1}},
-					})
-				}
-				methodStart = -1
-				braceDepth = 0
-			}
+		mt.braceDepth += strings.Count(line, "{") - strings.Count(line, "}")
+		if mt.braceDepth > 0 {
+			continue
 		}
+		if issue, ok := checkMethodLength(mt.name, fname, mt.start, i); ok {
+			issues = append(issues, issue)
+		}
+		mt.active = false
 	}
 
 	return issues
+}
+
+func tryStartTracking(lines []string, i int) methodTracker {
+	name, ok := tryStartMethod(lines, i)
+	if !ok {
+		return methodTracker{}
+	}
+	return methodTracker{
+		start:      i,
+		name:       name,
+		braceDepth: strings.Count(lines[i], "{") - strings.Count(lines[i], "}"),
+		active:     true,
+	}
+}
+
+func tryStartMethod(lines []string, i int) (string, bool) {
+	m := controllerMethodNameRe.FindStringSubmatch(lines[i])
+	if m == nil {
+		return "", false
+	}
+	if strings.Contains(lines[i], "{") || (i+1 < len(lines) && strings.Contains(lines[i+1], "{")) {
+		return m[1], true
+	}
+	return "", false
+}
+
+func checkMethodLength(methodName, fname string, start, end int) (domain.PatternIssue, bool) {
+	methodLen := end - start + 1
+	if methodLen <= 20 {
+		return domain.PatternIssue{}, false
+	}
+	return domain.PatternIssue{
+		Category:   "nestjs",
+		Dominant:   "logic-in-controller",
+		Violation:  fmt.Sprintf("Controller method %s at %s:%d is %d lines — extract business logic to a service", methodName, fname, start+1, methodLen),
+		Confidence: domain.ConfidenceMedium,
+		Locations:  []domain.Location{{File: fname, Line: start + 1}},
+	}, true
 }
 
 // detectMissingInjectable flags service files with export class but no @Injectable().

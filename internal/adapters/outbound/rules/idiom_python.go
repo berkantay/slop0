@@ -270,47 +270,58 @@ func detectMutableClassAttr(root *sitter.Node, src []byte, fname, modPath string
 		if body == nil {
 			return
 		}
-
-		for i := 0; i < int(body.NamedChildCount()); i++ {
-			child := body.NamedChild(i)
-			if child.Type() != "expression_statement" {
-				continue
-			}
-			if child.NamedChildCount() == 0 {
-				continue
-			}
-			assign := child.NamedChild(0)
-			if assign.Type() != "assignment" {
-				continue
-			}
-			value := assign.ChildByFieldName("value")
-			if value == nil {
-				continue
-			}
-			switch value.Type() {
-			case "list", "dictionary", "set":
-				issues = append(issues, domain.PatternIssue{
-					Category:  "style/mutable-class-attr",
-					Dominant:  "mutable class attribute is shared across all instances — initialize in __init__",
-					Violation: fmt.Sprintf("%s: %s", modPath, nodeTextPy(assign, src)),
-					Locations: []domain.Location{{File: fname, Line: int(assign.StartPoint().Row) + 1}},
-				})
-			}
-			if value.Type() == "call" {
-				fn := value.ChildByFieldName("function")
-				if fn != nil && nodeTextPy(fn, src) == "set" {
-					issues = append(issues, domain.PatternIssue{
-						Category:  "style/mutable-class-attr",
-						Dominant:  "mutable class attribute is shared across all instances — initialize in __init__",
-						Violation: fmt.Sprintf("%s: %s", modPath, nodeTextPy(assign, src)),
-						Locations: []domain.Location{{File: fname, Line: int(assign.StartPoint().Row) + 1}},
-					})
-				}
-			}
-		}
+		issues = append(issues, checkClassBodyForMutableAttrs(body, src, fname, modPath)...)
 	})
 
 	return issues
+}
+
+func checkClassBodyForMutableAttrs(body *sitter.Node, src []byte, fname, modPath string) []domain.PatternIssue {
+	var issues []domain.PatternIssue
+	for i := 0; i < int(body.NamedChildCount()); i++ {
+		child := body.NamedChild(i)
+		if assign, ok := extractClassAssignment(child); ok {
+			if isMutableClassAttrValue(assign, src) {
+				issues = append(issues, makeMutableClassAttrIssue(assign, src, fname, modPath))
+			}
+		}
+	}
+	return issues
+}
+
+func extractClassAssignment(child *sitter.Node) (*sitter.Node, bool) {
+	if child.Type() != "expression_statement" || child.NamedChildCount() == 0 {
+		return nil, false
+	}
+	assign := child.NamedChild(0)
+	if assign.Type() != "assignment" {
+		return nil, false
+	}
+	if assign.ChildByFieldName("value") == nil {
+		return nil, false
+	}
+	return assign, true
+}
+
+func isMutableClassAttrValue(assign *sitter.Node, src []byte) bool {
+	value := assign.ChildByFieldName("value")
+	switch value.Type() {
+	case "list", "dictionary", "set":
+		return true
+	case "call":
+		fn := value.ChildByFieldName("function")
+		return fn != nil && nodeTextPy(fn, src) == "set"
+	}
+	return false
+}
+
+func makeMutableClassAttrIssue(assign *sitter.Node, src []byte, fname, modPath string) domain.PatternIssue {
+	return domain.PatternIssue{
+		Category:  "style/mutable-class-attr",
+		Dominant:  "mutable class attribute is shared across all instances — initialize in __init__",
+		Violation: fmt.Sprintf("%s: %s", modPath, nodeTextPy(assign, src)),
+		Locations: []domain.Location{{File: fname, Line: int(assign.StartPoint().Row) + 1}},
+	}
 }
 
 var reOpenCall = regexp.MustCompile(`\bopen\s*\(`)

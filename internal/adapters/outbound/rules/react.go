@@ -112,59 +112,67 @@ func detectUseEffectDerivedState(root *sitter.Node, src []byte, fname, modPath s
 	return issues
 }
 
+type effectInfo struct {
+	setsState []string
+	deps      []string
+	line      int
+}
+
 func detectUseEffectChains(root *sitter.Node, src []byte, fname, modPath string) []domain.PatternIssue {
-	var issues []domain.PatternIssue
+	effects := collectEffectInfos(root, src)
+	return findEffectChainIssues(effects, fname, modPath)
+}
 
-	type effectInfo struct {
-		setsState []string
-		deps      []string
-		line      int
-	}
-
+func collectEffectInfos(root *sitter.Node, src []byte) []effectInfo {
 	var effects []effectInfo
+	stateSetters := collectStateSetters(root, src)
 
 	walkTS(root, func(node *sitter.Node) {
 		if !isUseEffectCall(node, src) {
 			return
 		}
-
 		body := findEffectBody(node)
-		deps := findEffectDeps(node, src)
 		if body == nil {
 			return
 		}
-
-		stateSetters := collectStateSetters(root, src)
-		setters := findSetterCallsInBody(body, src, stateSetters)
-
 		effects = append(effects, effectInfo{
-			setsState: setters,
-			deps:      deps,
+			setsState: findSetterCallsInBody(body, src, stateSetters),
+			deps:      findEffectDeps(node, src),
 			line:      int(node.StartPoint().Row) + 1,
 		})
 	})
 
+	return effects
+}
+
+func findEffectChainIssues(effects []effectInfo, fname, modPath string) []domain.PatternIssue {
+	var issues []domain.PatternIssue
 	for i, eff := range effects {
 		for j, other := range effects {
 			if i == j {
 				continue
 			}
-			for _, setter := range eff.setsState {
-				stateVar := setterToStateVar(setter)
-				for _, dep := range other.deps {
-					if dep == stateVar {
-						issues = append(issues, domain.PatternIssue{
-							Category:  "react/effect-chain",
-							Dominant:  "useEffect sets state that triggers another useEffect — combine or restructure",
-							Violation: fmt.Sprintf("%s: effect at line %d sets %s → triggers effect at line %d", modPath, eff.line, stateVar, other.line),
-							Locations: []domain.Location{{File: fname, Line: eff.line}},
-						})
-					}
-				}
+			issues = append(issues, matchEffectChain(eff, other, fname, modPath)...)
+		}
+	}
+	return issues
+}
+
+func matchEffectChain(eff, other effectInfo, fname, modPath string) []domain.PatternIssue {
+	var issues []domain.PatternIssue
+	for _, setter := range eff.setsState {
+		stateVar := setterToStateVar(setter)
+		for _, dep := range other.deps {
+			if dep == stateVar {
+				issues = append(issues, domain.PatternIssue{
+					Category:  "react/effect-chain",
+					Dominant:  "useEffect sets state that triggers another useEffect — combine or restructure",
+					Violation: fmt.Sprintf("%s: effect at line %d sets %s → triggers effect at line %d", modPath, eff.line, stateVar, other.line),
+					Locations: []domain.Location{{File: fname, Line: eff.line}},
+				})
 			}
 		}
 	}
-
 	return issues
 }
 
@@ -242,46 +250,48 @@ func detectIndexAsKey(root *sitter.Node, src []byte, fname, modPath string) []do
 	var issues []domain.PatternIssue
 
 	walkTS(root, func(node *sitter.Node) {
-		if node.Type() != "call_expression" {
-			return
-		}
-
-		fn := node.ChildByFieldName("function")
-		if fn == nil || fn.Type() != "member_expression" {
-			return
-		}
-
-		prop := fn.ChildByFieldName("property")
-		if prop == nil || tsNodeText(prop, src) != "map" {
-			return
-		}
-
-		args := node.ChildByFieldName("arguments")
-		if args == nil || args.NamedChildCount() == 0 {
-			return
-		}
-
-		callback := args.NamedChild(0)
-		if callback == nil {
-			return
-		}
-
-		indexParam := findMapIndexParam(callback, src)
-		if indexParam == "" {
-			return
-		}
-
-		if hasKeyWithValue(callback, src, indexParam) {
-			issues = append(issues, domain.PatternIssue{
-				Category:  "react/index-as-key",
-				Dominant:  "using array index as key causes bugs with reordering — use a stable unique identifier",
-				Violation: fmt.Sprintf("%s: .map() uses index as key", modPath),
-				Locations: []domain.Location{{File: fname, Line: int(node.StartPoint().Row) + 1}},
-			})
+		if issue, ok := checkMapCallForIndexKey(node, src, fname, modPath); ok {
+			issues = append(issues, issue)
 		}
 	})
 
 	return issues
+}
+
+func checkMapCallForIndexKey(node *sitter.Node, src []byte, fname, modPath string) (domain.PatternIssue, bool) {
+	if node.Type() != "call_expression" {
+		return domain.PatternIssue{}, false
+	}
+	fn := node.ChildByFieldName("function")
+	if fn == nil || fn.Type() != "member_expression" {
+		return domain.PatternIssue{}, false
+	}
+	prop := fn.ChildByFieldName("property")
+	if prop == nil || tsNodeText(prop, src) != "map" {
+		return domain.PatternIssue{}, false
+	}
+	callback := extractMapCallback(node)
+	if callback == nil {
+		return domain.PatternIssue{}, false
+	}
+	indexParam := findMapIndexParam(callback, src)
+	if indexParam == "" || !hasKeyWithValue(callback, src, indexParam) {
+		return domain.PatternIssue{}, false
+	}
+	return domain.PatternIssue{
+		Category:  "react/index-as-key",
+		Dominant:  "using array index as key causes bugs with reordering — use a stable unique identifier",
+		Violation: fmt.Sprintf("%s: .map() uses index as key", modPath),
+		Locations: []domain.Location{{File: fname, Line: int(node.StartPoint().Row) + 1}},
+	}, true
+}
+
+func extractMapCallback(node *sitter.Node) *sitter.Node {
+	args := node.ChildByFieldName("arguments")
+	if args == nil || args.NamedChildCount() == 0 {
+		return nil
+	}
+	return args.NamedChild(0)
 }
 
 func detectMissingQueryInvalidation(root *sitter.Node, src []byte, fname, modPath string) []domain.PatternIssue {
@@ -432,32 +442,31 @@ func collectStateSetters(root *sitter.Node, src []byte) map[string]string {
 	setters := make(map[string]string)
 
 	walkTS(root, func(node *sitter.Node) {
-		if node.Type() != "call_expression" {
-			return
-		}
-		fn := node.ChildByFieldName("function")
-		if fn == nil || tsNodeText(fn, src) != "useState" {
-			return
-		}
-
-		parent := node.Parent()
-		if parent == nil {
-			return
-		}
-
-		if parent.Type() == "variable_declarator" {
-			nameNode := parent.ChildByFieldName("name")
-			if nameNode != nil && nameNode.Type() == "array_pattern" {
-				if nameNode.NamedChildCount() >= 2 {
-					stateVar := tsNodeText(nameNode.NamedChild(0), src)
-					setter := tsNodeText(nameNode.NamedChild(1), src)
-					setters[setter] = stateVar
-				}
-			}
+		if s, v, ok := extractUseStatePair(node, src); ok {
+			setters[s] = v
 		}
 	})
 
 	return setters
+}
+
+func extractUseStatePair(node *sitter.Node, src []byte) (setter, stateVar string, ok bool) {
+	if node.Type() != "call_expression" {
+		return "", "", false
+	}
+	fn := node.ChildByFieldName("function")
+	if fn == nil || tsNodeText(fn, src) != "useState" {
+		return "", "", false
+	}
+	parent := node.Parent()
+	if parent == nil || parent.Type() != "variable_declarator" {
+		return "", "", false
+	}
+	nameNode := parent.ChildByFieldName("name")
+	if nameNode == nil || nameNode.Type() != "array_pattern" || nameNode.NamedChildCount() < 2 {
+		return "", "", false
+	}
+	return tsNodeText(nameNode.NamedChild(1), src), tsNodeText(nameNode.NamedChild(0), src), true
 }
 
 func findEffectBody(node *sitter.Node) *sitter.Node {
@@ -631,36 +640,43 @@ func detectTooManyUseState(root *sitter.Node, src []byte, fname, modPath string)
 	var issues []domain.PatternIssue
 
 	walkTS(root, func(node *sitter.Node) {
-		if node.Type() != "function_declaration" && node.Type() != "arrow_function" && node.Type() != "variable_declarator" {
+		if !isComponentLikeNode(node) {
 			return
 		}
-
 		body := node.ChildByFieldName("body")
 		if body == nil {
 			return
 		}
-
-		useStateCount := 0
-		walkTS(body, func(n *sitter.Node) {
-			if n.Type() == "call_expression" {
-				fn := n.ChildByFieldName("function")
-				if fn != nil && tsNodeText(fn, src) == "useState" {
-					useStateCount++
-				}
-			}
-		})
-
-		if useStateCount >= 5 {
+		count := countUseStateCalls(body, src)
+		if count >= 5 {
 			issues = append(issues, domain.PatternIssue{
 				Category:  "react/too-many-usestate",
-				Dominant:  fmt.Sprintf("%d useState calls — consider useReducer for related state", useStateCount),
-				Violation: fmt.Sprintf("%s: %d useState in one component", modPath, useStateCount),
+				Dominant:  fmt.Sprintf("%d useState calls — consider useReducer for related state", count),
+				Violation: fmt.Sprintf("%s: %d useState in one component", modPath, count),
 				Locations: []domain.Location{{File: fname, Line: int(node.StartPoint().Row) + 1}},
 			})
 		}
 	})
 
 	return issues
+}
+
+func isComponentLikeNode(node *sitter.Node) bool {
+	t := node.Type()
+	return t == "function_declaration" || t == "arrow_function" || t == "variable_declarator"
+}
+
+func countUseStateCalls(body *sitter.Node, src []byte) int {
+	count := 0
+	walkTS(body, func(n *sitter.Node) {
+		if n.Type() == "call_expression" {
+			fn := n.ChildByFieldName("function")
+			if fn != nil && tsNodeText(fn, src) == "useState" {
+				count++
+			}
+		}
+	})
+	return count
 }
 
 func countJSXElements(node *sitter.Node) int {

@@ -135,7 +135,6 @@ func (d *DjangoDetector) detectRawSQLWithoutParams(lines []string, fname, modPat
 
 var modelsModelRe = regexp.MustCompile(`class\s+\w+\(.*models\.Model`)
 
-// detectMissingMeta flags Django models without a Meta class.
 func (d *DjangoDetector) detectMissingMeta(lines []string, fname, modPath string) []domain.PatternIssue {
 	var issues []domain.PatternIssue
 
@@ -143,19 +142,7 @@ func (d *DjangoDetector) detectMissingMeta(lines []string, fname, modPath string
 		if !modelsModelRe.MatchString(line) {
 			continue
 		}
-		hasMeta := false
-		for j := i + 1; j < len(lines); j++ {
-			trimmed := strings.TrimSpace(lines[j])
-			// next class or top-level def means class body ended
-			if j > i+1 && len(lines[j]) > 0 && lines[j][0] != ' ' && lines[j][0] != '\t' && trimmed != "" {
-				break
-			}
-			if strings.Contains(trimmed, "class Meta") {
-				hasMeta = true
-				break
-			}
-		}
-		if !hasMeta {
+		if !modelBodyContains(lines, i, "class Meta") {
 			issues = append(issues, domain.PatternIssue{
 				Category:   "django",
 				Dominant:   "missing-meta-class",
@@ -169,7 +156,19 @@ func (d *DjangoDetector) detectMissingMeta(lines []string, fname, modPath string
 	return issues
 }
 
-// detectMissingStr flags Django models without __str__.
+func modelBodyContains(lines []string, classLine int, needle string) bool {
+	for j := classLine + 1; j < len(lines); j++ {
+		trimmed := strings.TrimSpace(lines[j])
+		if j > classLine+1 && len(lines[j]) > 0 && lines[j][0] != ' ' && lines[j][0] != '\t' && trimmed != "" {
+			break
+		}
+		if strings.Contains(trimmed, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *DjangoDetector) detectMissingStr(lines []string, fname, modPath string) []domain.PatternIssue {
 	var issues []domain.PatternIssue
 
@@ -177,18 +176,7 @@ func (d *DjangoDetector) detectMissingStr(lines []string, fname, modPath string)
 		if !modelsModelRe.MatchString(line) {
 			continue
 		}
-		hasStr := false
-		for j := i + 1; j < len(lines); j++ {
-			trimmed := strings.TrimSpace(lines[j])
-			if j > i+1 && len(lines[j]) > 0 && lines[j][0] != ' ' && lines[j][0] != '\t' && trimmed != "" {
-				break
-			}
-			if strings.Contains(trimmed, "def __str__") {
-				hasStr = true
-				break
-			}
-		}
-		if !hasStr {
+		if !modelBodyContains(lines, i, "def __str__") {
 			issues = append(issues, domain.PatternIssue{
 				Category:   "django",
 				Dominant:   "missing-str-method",
@@ -281,25 +269,9 @@ func (d *DjangoDetector) detectAllWithoutPagination(lines []string, fname, modPa
 		if !allCallRe.MatchString(line) {
 			continue
 		}
-		trimmed := strings.TrimSpace(line)
-		// Skip if followed by slicing, .first(), or paginator
-		if strings.Contains(trimmed, ".all()[") || strings.Contains(trimmed, "[:") {
+		if allCallHasPagination(lines, i) {
 			continue
 		}
-		if strings.Contains(trimmed, ".first()") || strings.Contains(trimmed, ".last()") {
-			continue
-		}
-		if strings.Contains(trimmed, "paginator") || strings.Contains(trimmed, "Paginator") || strings.Contains(trimmed, "paginate") {
-			continue
-		}
-		// Check next line for pagination too
-		if i+1 < len(lines) {
-			next := strings.TrimSpace(lines[i+1])
-			if strings.Contains(next, "paginator") || strings.Contains(next, "Paginator") || strings.Contains(next, "[:") {
-				continue
-			}
-		}
-
 		issues = append(issues, domain.PatternIssue{
 			Category:   "django",
 			Dominant:   "all-without-pagination",
@@ -310,4 +282,28 @@ func (d *DjangoDetector) detectAllWithoutPagination(lines []string, fname, modPa
 	}
 
 	return issues
+}
+
+func allCallHasPagination(lines []string, i int) bool {
+	trimmed := strings.TrimSpace(lines[i])
+	if strings.Contains(trimmed, ".all()[") || strings.Contains(trimmed, "[:") {
+		return true
+	}
+	if strings.Contains(trimmed, ".first()") || strings.Contains(trimmed, ".last()") {
+		return true
+	}
+	if containsPaginatorRef(trimmed) {
+		return true
+	}
+	if i+1 < len(lines) {
+		next := strings.TrimSpace(lines[i+1])
+		if containsPaginatorRef(next) || strings.Contains(next, "[:") {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPaginatorRef(s string) bool {
+	return strings.Contains(s, "paginator") || strings.Contains(s, "Paginator") || strings.Contains(s, "paginate")
 }
