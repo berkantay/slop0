@@ -1,16 +1,27 @@
 package rules
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+
+	sitter "github.com/smacker/go-tree-sitter"
+	"github.com/smacker/go-tree-sitter/typescript/typescript"
 
 	"github.com/berkantay/slop0/internal/domain"
 )
 
-type TypeScriptIdiomDetector struct{}
+type TypeScriptIdiomDetector struct {
+	parser *sitter.Parser
+}
+
+func NewTypeScriptIdiomDetector() *TypeScriptIdiomDetector {
+	parser := sitter.NewParser()
+	parser.SetLanguage(typescript.GetLanguage())
+	return &TypeScriptIdiomDetector{parser: parser}
+}
 
 func (d *TypeScriptIdiomDetector) Detect(pkgs []domain.Package) []domain.PatternIssue {
 	var issues []domain.PatternIssue
@@ -20,13 +31,127 @@ func (d *TypeScriptIdiomDetector) Detect(pkgs []domain.Package) []domain.Pattern
 		issues = append(issues, detectNonNullAssertion(pkg)...)
 		issues = append(issues, detectTSNamingIssues(pkg)...)
 		issues = append(issues, detectConsoleLog(pkg)...)
-		issues = append(issues, detectAsTypeAssertionOveruse(pkg)...)
-		issues = append(issues, detectMissingReturnTypesOnExports(pkg)...)
-		issues = append(issues, detectEnumUsage(pkg)...)
-		issues = append(issues, detectNonNullAssertionCountPerFile(pkg)...)
+	}
+
+	seen := make(map[string]bool)
+	for _, pkg := range pkgs {
+		for _, fn := range pkg.Functions {
+			if fn.File == "" || seen[fn.File] {
+				continue
+			}
+			seen[fn.File] = true
+			issues = append(issues, d.detectFileIssuesTS(fn.File, pkg.Path)...)
+		}
 	}
 
 	return issues
+}
+
+func (d *TypeScriptIdiomDetector) detectFileIssuesTS(file, modPath string) []domain.PatternIssue {
+	src, err := os.ReadFile(file)
+	if err != nil {
+		return nil
+	}
+
+	tree, err := d.parser.ParseCtx(context.Background(), nil, src)
+	if err != nil {
+		return nil
+	}
+
+	root := tree.RootNode()
+	fname := filepath.Base(file)
+	var issues []domain.PatternIssue
+
+	issues = append(issues, detectAsAssertionByAST(root, src, fname, modPath)...)
+	issues = append(issues, detectEnumByAST(root, src, fname, modPath)...)
+	issues = append(issues, detectMissingReturnTypeByAST(root, src, fname, modPath)...)
+	issues = append(issues, detectNonNullCountByAST(root, src, fname, modPath)...)
+
+	return issues
+}
+
+func detectAsAssertionByAST(root *sitter.Node, src []byte, fname, modPath string) []domain.PatternIssue {
+	count := 0
+	walkTS(root, func(node *sitter.Node) {
+		if node.Type() == "as_expression" {
+			count++
+		}
+	})
+
+	if count > 3 {
+		return []domain.PatternIssue{{
+			Category:  "style/as-assertion-overuse",
+			Dominant:  "excessive 'as' type assertions bypass type safety — refine types instead",
+			Violation: fmt.Sprintf("%s: %d 'as' assertions in %s", modPath, count, fname),
+			Locations: []domain.Location{{File: fname, Line: 1}},
+		}}
+	}
+	return nil
+}
+
+func detectEnumByAST(root *sitter.Node, src []byte, fname, modPath string) []domain.PatternIssue {
+	var issues []domain.PatternIssue
+	walkTS(root, func(node *sitter.Node) {
+		if node.Type() == "enum_declaration" {
+			name := ""
+			nameNode := node.ChildByFieldName("name")
+			if nameNode != nil {
+				name = tsNodeText(nameNode, src)
+			}
+			issues = append(issues, domain.PatternIssue{
+				Category:  "style/enum-usage",
+				Dominant:  "prefer union types over enums — more flexible and tree-shakeable",
+				Violation: fmt.Sprintf("%s: enum %s", modPath, name),
+				Locations: []domain.Location{{File: fname, Line: int(node.StartPoint().Row) + 1}},
+			})
+		}
+	})
+	return issues
+}
+
+func detectMissingReturnTypeByAST(root *sitter.Node, src []byte, fname, modPath string) []domain.PatternIssue {
+	var issues []domain.PatternIssue
+
+	walkTS(root, func(node *sitter.Node) {
+		if node.Type() != "export_statement" {
+			return
+		}
+
+		walkTS(node, func(child *sitter.Node) {
+			if child.Type() == "function_declaration" {
+				if child.ChildByFieldName("return_type") == nil {
+					name := tsNodeText(child.ChildByFieldName("name"), src)
+					issues = append(issues, domain.PatternIssue{
+						Category:  "style/missing-return-type",
+						Dominant:  "exported function missing return type annotation",
+						Violation: fmt.Sprintf("%s: export function %s", modPath, name),
+						Locations: []domain.Location{{File: fname, Line: int(child.StartPoint().Row) + 1}},
+					})
+				}
+			}
+		})
+	})
+
+	return issues
+}
+
+func detectNonNullCountByAST(root *sitter.Node, src []byte, fname, modPath string) []domain.PatternIssue {
+	count := 0
+	walkTS(root, func(node *sitter.Node) {
+		if node.Type() == "non_null_expression" {
+			count++
+		}
+	})
+
+	if count > 5 {
+		return []domain.PatternIssue{{
+			Category:  "style/non-null-assertion-overuse",
+			Dominant:  fmt.Sprintf("%d non-null assertions — use proper null checks or optional chaining", count),
+			Violation: fmt.Sprintf("%s: %s", modPath, fname),
+			Locations: []domain.Location{{File: fname, Line: 1}},
+		}}
+	}
+	return nil
 }
 
 func detectAnyType(pkg domain.Package) []domain.PatternIssue {
@@ -80,7 +205,7 @@ func detectTSNamingIssues(pkg domain.Package) []domain.PatternIssue {
 	var issues []domain.PatternIssue
 
 	for _, t := range pkg.Types {
-		if t.Kind == "interface" && strings.HasPrefix(t.Name, "I") && len(t.Name) > 1 {
+		if t.Kind == "interface" && len(t.Name) > 1 && t.Name[0] == 'I' {
 			second := rune(t.Name[1])
 			if second >= 'A' && second <= 'Z' {
 				issues = append(issues, domain.PatternIssue{
@@ -96,156 +221,31 @@ func detectTSNamingIssues(pkg domain.Package) []domain.PatternIssue {
 	return issues
 }
 
-var reAsKeyword = regexp.MustCompile(`\bas\s+`)
-var reMissingReturnType = regexp.MustCompile(`^export\s+(?:function|const)\s+\w+[^:]*[{=]`)
-var reEnum = regexp.MustCompile(`\benum\b`)
-
-func detectAsTypeAssertionOveruse(pkg domain.Package) []domain.PatternIssue {
-	var issues []domain.PatternIssue
-
-	for _, fn := range pkg.Functions {
-		if fn.File == "" {
-			continue
-		}
-		src, err := os.ReadFile(fn.File)
-		if err != nil {
-			continue
-		}
-		content := string(src)
-
-		// Count "as " keywords in the function's rough vicinity using signature+calls as proxy
-		// Better: count per-file basis
-		matches := reAsKeyword.FindAllStringIndex(content, -1)
-		if len(matches) > 3 {
-			issues = append(issues, domain.PatternIssue{
-				Category:  "style/as-assertion-overuse",
-				Dominant:  "excessive 'as' type assertions bypass type safety — refine types instead",
-				Violation: fmt.Sprintf("%s: %d 'as' assertions in %s", domain.ShortPkgName(pkg.Path), len(matches), filepath.Base(fn.File)),
-				Locations: []domain.Location{{File: filepath.Base(fn.File), Line: fn.Line}},
-			})
-		}
-		break // one check per file from this package
-	}
-	return issues
-}
-
-func detectMissingReturnTypesOnExports(pkg domain.Package) []domain.PatternIssue {
-	for _, fn := range pkg.Functions {
-		if fn.File == "" {
-			continue
-		}
-		src, err := os.ReadFile(fn.File)
-		if err != nil {
-			continue
-		}
-		return scanFileForMissingReturnTypes(src, filepath.Base(fn.File), pkg.Path)
-	}
-	return nil
-}
-
-func scanFileForMissingReturnTypes(src []byte, fname, pkgPath string) []domain.PatternIssue {
-	var issues []domain.PatternIssue
-	lines := strings.Split(string(src), "\n")
-	for i, line := range lines {
-		if !reMissingReturnType.MatchString(line) {
-			continue
-		}
-		if exportMissingReturnAnnotation(line) {
-			issues = append(issues, domain.PatternIssue{
-				Category:  "style/missing-return-type",
-				Dominant:  "exported function missing explicit return type — add return type annotation",
-				Violation: fmt.Sprintf("%s: %s", domain.ShortPkgName(pkgPath), strings.TrimSpace(line)),
-				Locations: []domain.Location{{File: fname, Line: i + 1}},
-			})
-		}
-	}
-	return issues
-}
-
-func exportMissingReturnAnnotation(line string) bool {
-	idx := strings.LastIndex(line, ")")
-	if idx < 0 {
-		return false
-	}
-	rest := line[idx+1:]
-	return !strings.Contains(rest, ":")
-}
-
-func detectEnumUsage(pkg domain.Package) []domain.PatternIssue {
-	var issues []domain.PatternIssue
-
-	for _, fn := range pkg.Functions {
-		if fn.File == "" {
-			continue
-		}
-		src, err := os.ReadFile(fn.File)
-		if err != nil {
-			continue
-		}
-
-		fname := filepath.Base(fn.File)
-		lines := strings.Split(string(src), "\n")
-		for i, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			if reEnum.MatchString(trimmed) && !strings.HasPrefix(trimmed, "//") && !strings.HasPrefix(trimmed, "*") {
-				issues = append(issues, domain.PatternIssue{
-					Category:  "style/enum-usage",
-					Dominant:  "prefer union types over enums — they are more flexible and tree-shakeable",
-					Violation: fmt.Sprintf("%s: %s", domain.ShortPkgName(pkg.Path), trimmed),
-					Locations: []domain.Location{{File: fname, Line: i + 1}},
-				})
-			}
-		}
-		break // one check per file from this package
-	}
-	return issues
-}
-
-func detectNonNullAssertionCountPerFile(pkg domain.Package) []domain.PatternIssue {
-	var issues []domain.PatternIssue
-
-	for _, fn := range pkg.Functions {
-		if fn.File == "" {
-			continue
-		}
-		src, err := os.ReadFile(fn.File)
-		if err != nil {
-			continue
-		}
-
-		content := string(src)
-		fname := filepath.Base(fn.File)
-		count := strings.Count(content, "!.") + strings.Count(content, "!)")
-		if count > 5 {
-			issues = append(issues, domain.PatternIssue{
-				Category:  "style/non-null-assertion-overuse",
-				Dominant:  fmt.Sprintf("%d non-null assertions in file — use proper null checks or optional chaining", count),
-				Violation: fmt.Sprintf("%s: %s", domain.ShortPkgName(pkg.Path), fname),
-				Locations: []domain.Location{{File: fname, Line: 1}},
-			})
-		}
-		break // one check per file from this package
-	}
-	return issues
-}
-
 func detectConsoleLog(pkg domain.Package) []domain.PatternIssue {
 	var issues []domain.PatternIssue
 
 	for _, fn := range pkg.Functions {
 		for _, call := range fn.Calls {
-			if strings.Contains(call, "console.log") || strings.Contains(call, "console.warn") || strings.Contains(call, "console.error") {
-				if !strings.Contains(fn.File, "test") && !strings.Contains(fn.File, "spec") {
-					issues = append(issues, domain.PatternIssue{
-						Category:  "style/console-log",
-						Dominant:  "console.log in production code — use a proper logger",
-						Violation: fmt.Sprintf("%s.%s calls %s", domain.ShortPkgName(pkg.Path), fn.Name, call),
-						Locations: []domain.Location{{File: fn.File, Line: fn.Line}},
-					})
-				}
+			if !isConsolePrint(call) {
+				continue
 			}
+			if strings.Contains(fn.File, "test") || strings.Contains(fn.File, "spec") {
+				continue
+			}
+			issues = append(issues, domain.PatternIssue{
+				Category:  "style/console-log",
+				Dominant:  "console.log in production code — use a proper logger",
+				Violation: fmt.Sprintf("%s.%s calls %s", domain.ShortPkgName(pkg.Path), fn.Name, call),
+				Locations: []domain.Location{{File: fn.File, Line: fn.Line}},
+			})
 		}
 	}
 
 	return issues
+}
+
+func isConsolePrint(call string) bool {
+	return strings.Contains(call, "console.log") ||
+		strings.Contains(call, "console.warn") ||
+		strings.Contains(call, "console.error")
 }

@@ -39,7 +39,6 @@ type Engine struct {
 	graphAnalyzer    *GraphAnalyzer
 	django           *DjangoDetector
 	fastapi          *FastAPIDetector
-	nestjsFw         *NestJSDetector
 }
 
 func NewEngine() *Engine {
@@ -67,7 +66,7 @@ func NewEngine() *Engine {
 		pyIdiom:          NewPythonIdiomDetector(),
 		pyBoundaries:     &PythonBoundaryDetector{},
 		tsEntryPoints:    &TypeScriptEntryPointDetector{},
-		tsIdiom:          &TypeScriptIdiomDetector{},
+		tsIdiom:          NewTypeScriptIdiomDetector(),
 		tsBoundaries:     &TypeScriptBoundaryDetector{},
 		react:            NewReactDetector(),
 		nextjs:           NewNextJSDetector(),
@@ -76,7 +75,6 @@ func NewEngine() *Engine {
 		graphAnalyzer:    &GraphAnalyzer{},
 		django:           &DjangoDetector{},
 		fastapi:          &FastAPIDetector{},
-		nestjsFw:         &NestJSDetector{},
 	}
 }
 
@@ -140,7 +138,6 @@ func (e *Engine) runPatternChecks(pkgs []domain.Package, thresholds domain.Thres
 
 	report.PatternIssues = append(report.PatternIssues, e.django.Detect(pkgs)...)
 	report.PatternIssues = append(report.PatternIssues, e.fastapi.Detect(pkgs)...)
-	report.PatternIssues = append(report.PatternIssues, e.nestjsFw.Detect(pkgs)...)
 
 	report.PatternIssues = e.confidence.ScoreIssues(report.PatternIssues, pkgs)
 }

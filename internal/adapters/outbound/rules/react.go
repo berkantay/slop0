@@ -397,12 +397,6 @@ func detectDirectDOMManipulation(root *sitter.Node, src []byte, fname, modPath s
 func detectBarrelImports(root *sitter.Node, src []byte, fname, modPath string) []domain.PatternIssue {
 	var issues []domain.PatternIssue
 
-	barrelPackages := map[string]bool{
-		"lodash": true, "ramda": true, "date-fns": true,
-		"@mui/material": true, "@mui/icons-material": true,
-		"rxjs": true, "rxjs/operators": true,
-	}
-
 	walkTS(root, func(node *sitter.Node) {
 		if node.Type() != "import_statement" {
 			return
@@ -414,19 +408,44 @@ func detectBarrelImports(root *sitter.Node, src []byte, fname, modPath string) [
 		}
 
 		mod := strings.Trim(tsNodeText(source, src), `"'`)
-		if !barrelPackages[mod] {
+		if isRelativeImport(mod) || hasSubpath(mod) {
 			return
 		}
 
-		issues = append(issues, domain.PatternIssue{
-			Category:  "perf/barrel-import",
-			Dominant:  fmt.Sprintf("importing from '%s' barrel — use deep imports for smaller bundles", mod),
-			Violation: fmt.Sprintf("%s: barrel import from %s", modPath, mod),
-			Locations: []domain.Location{{File: fname, Line: int(node.StartPoint().Row) + 1}},
-		})
+		namedCount := countNamedImports(node)
+		if namedCount > 5 {
+			issues = append(issues, domain.PatternIssue{
+				Category:  "perf/barrel-import",
+				Dominant:  fmt.Sprintf("importing %d named exports from '%s' — use deep/subpath imports for smaller bundles", namedCount, mod),
+				Violation: fmt.Sprintf("%s: %d imports from %s", modPath, namedCount, mod),
+				Locations: []domain.Location{{File: fname, Line: int(node.StartPoint().Row) + 1}},
+			})
+		}
 	})
 
 	return issues
+}
+
+func isRelativeImport(mod string) bool {
+	return strings.HasPrefix(mod, ".") || strings.HasPrefix(mod, "/")
+}
+
+func hasSubpath(mod string) bool {
+	if strings.HasPrefix(mod, "@") {
+		parts := strings.SplitN(mod, "/", 3)
+		return len(parts) > 2
+	}
+	return strings.Contains(mod, "/")
+}
+
+func countNamedImports(importNode *sitter.Node) int {
+	count := 0
+	walkTS(importNode, func(node *sitter.Node) {
+		if node.Type() == "import_specifier" {
+			count++
+		}
+	})
+	return count
 }
 
 func makeDOMIssue(modPath, method, fname string, node *sitter.Node) domain.PatternIssue {
