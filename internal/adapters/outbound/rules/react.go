@@ -58,6 +58,8 @@ func (d *ReactDetector) analyzeFile(file, modPath string) []domain.PatternIssue 
 	fname := filepath.Base(file)
 	var issues []domain.PatternIssue
 
+	issues = append(issues, detectGodComponent(root, src, fname, modPath)...)
+	issues = append(issues, detectTooManyUseState(root, src, fname, modPath)...)
 	issues = append(issues, detectUseEffectDerivedState(root, src, fname, modPath)...)
 	issues = append(issues, detectUseEffectChains(root, src, fname, modPath)...)
 	issues = append(issues, detectInlineFunctionsInJSX(root, src, fname, modPath)...)
@@ -590,6 +592,98 @@ func hasKeyWithValue(callback *sitter.Node, src []byte, indexParam string) bool 
 		}
 	})
 	return found
+}
+
+func detectGodComponent(root *sitter.Node, src []byte, fname, modPath string) []domain.PatternIssue {
+	var issues []domain.PatternIssue
+
+	walkTS(root, func(node *sitter.Node) {
+		if node.Type() != "function_declaration" && node.Type() != "arrow_function" {
+			return
+		}
+
+		jsxCount := countJSXElements(node)
+		hookCount := countHookCalls(node, src)
+
+		if jsxCount > 50 {
+			issues = append(issues, domain.PatternIssue{
+				Category:  "react/god-component",
+				Dominant:  "component has too many JSX elements — split into smaller components",
+				Violation: fmt.Sprintf("%s: %d JSX elements", modPath, jsxCount),
+				Locations: []domain.Location{{File: fname, Line: int(node.StartPoint().Row) + 1}},
+			})
+		}
+
+		if hookCount > 8 {
+			issues = append(issues, domain.PatternIssue{
+				Category:  "react/god-component",
+				Dominant:  "component uses too many hooks — split responsibilities",
+				Violation: fmt.Sprintf("%s: %d hook calls", modPath, hookCount),
+				Locations: []domain.Location{{File: fname, Line: int(node.StartPoint().Row) + 1}},
+			})
+		}
+	})
+
+	return issues
+}
+
+func detectTooManyUseState(root *sitter.Node, src []byte, fname, modPath string) []domain.PatternIssue {
+	var issues []domain.PatternIssue
+
+	walkTS(root, func(node *sitter.Node) {
+		if node.Type() != "function_declaration" && node.Type() != "arrow_function" && node.Type() != "variable_declarator" {
+			return
+		}
+
+		body := node.ChildByFieldName("body")
+		if body == nil {
+			return
+		}
+
+		useStateCount := 0
+		walkTS(body, func(n *sitter.Node) {
+			if n.Type() == "call_expression" {
+				fn := n.ChildByFieldName("function")
+				if fn != nil && tsNodeText(fn, src) == "useState" {
+					useStateCount++
+				}
+			}
+		})
+
+		if useStateCount >= 5 {
+			issues = append(issues, domain.PatternIssue{
+				Category:  "react/too-many-usestate",
+				Dominant:  fmt.Sprintf("%d useState calls — consider useReducer for related state", useStateCount),
+				Violation: fmt.Sprintf("%s: %d useState in one component", modPath, useStateCount),
+				Locations: []domain.Location{{File: fname, Line: int(node.StartPoint().Row) + 1}},
+			})
+		}
+	})
+
+	return issues
+}
+
+func countJSXElements(node *sitter.Node) int {
+	count := 0
+	walkTS(node, func(n *sitter.Node) {
+		if n.Type() == "jsx_element" || n.Type() == "jsx_self_closing_element" {
+			count++
+		}
+	})
+	return count
+}
+
+func countHookCalls(node *sitter.Node, src []byte) int {
+	count := 0
+	walkTS(node, func(n *sitter.Node) {
+		if n.Type() == "call_expression" {
+			fn := n.ChildByFieldName("function")
+			if fn != nil && strings.HasPrefix(tsNodeText(fn, src), "use") {
+				count++
+			}
+		}
+	})
+	return count
 }
 
 func tsNodeText(node *sitter.Node, src []byte) string {
