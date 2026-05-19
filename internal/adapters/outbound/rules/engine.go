@@ -34,6 +34,11 @@ type Engine struct {
 	tsBoundaries     *TypeScriptBoundaryDetector
 	react            *ReactDetector
 	nextjs           *NextJSDetector
+	security         *SecurityDetector
+	codeQuality      *CodeQualityDetector
+	django           *DjangoDetector
+	fastapi          *FastAPIDetector
+	nestjsFw         *NestJSDetector
 }
 
 func NewEngine() *Engine {
@@ -65,6 +70,11 @@ func NewEngine() *Engine {
 		tsBoundaries:     &TypeScriptBoundaryDetector{},
 		react:            NewReactDetector(),
 		nextjs:           NewNextJSDetector(),
+		security:         NewSecurityDetector(),
+		codeQuality:      &CodeQualityDetector{},
+		django:           &DjangoDetector{},
+		fastapi:          &FastAPIDetector{},
+		nestjsFw:         &NestJSDetector{},
 	}
 }
 
@@ -110,6 +120,9 @@ func (e *Engine) runPatternChecks(pkgs []domain.Package, thresholds domain.Thres
 		report.PatternIssues = append(report.PatternIssues, patterns...)
 	}
 
+	report.PatternIssues = append(report.PatternIssues, e.security.Detect(pkgs)...)
+	report.PatternIssues = append(report.PatternIssues, e.codeQuality.Detect(pkgs)...)
+
 	lang := detectProjectLang(pkgs)
 
 	switch lang {
@@ -123,12 +136,17 @@ func (e *Engine) runPatternChecks(pkgs []domain.Package, thresholds domain.Thres
 		report.PatternIssues = append(report.PatternIssues, e.nextjs.Detect(pkgs)...)
 	}
 
+	report.PatternIssues = append(report.PatternIssues, e.django.Detect(pkgs)...)
+	report.PatternIssues = append(report.PatternIssues, e.fastapi.Detect(pkgs)...)
+	report.PatternIssues = append(report.PatternIssues, e.nestjsFw.Detect(pkgs)...)
+
 	report.PatternIssues = e.confidence.ScoreIssues(report.PatternIssues, pkgs)
 }
 
 func (e *Engine) runGoPatternChecks(pkgs []domain.Package, thresholds domain.Thresholds, cache *PkgCache, report *domain.Report) {
 	report.PatternIssues = append(report.PatternIssues, e.inferrer.InferErrorPatternsFromCache(cache, thresholds)...)
 	report.PatternIssues = append(report.PatternIssues, e.idiom.DetectFromCache(cache)...)
+	report.PatternIssues = append(report.PatternIssues, detectGoExtras(pkgs)...)
 
 	syntaxPkgs, syntaxFset := cache.Syntax()
 	report.PatternIssues = append(report.PatternIssues, e.complexity.DetectFromLoaded(syntaxPkgs, syntaxFset, thresholds)...)
