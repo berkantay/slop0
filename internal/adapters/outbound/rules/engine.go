@@ -36,6 +36,7 @@ type Engine struct {
 	nextjs           *NextJSDetector
 	security         *SecurityDetector
 	codeQuality      *CodeQualityDetector
+	graphAnalyzer    *GraphAnalyzer
 	django           *DjangoDetector
 	fastapi          *FastAPIDetector
 	nestjsFw         *NestJSDetector
@@ -72,6 +73,7 @@ func NewEngine() *Engine {
 		nextjs:           NewNextJSDetector(),
 		security:         NewSecurityDetector(),
 		codeQuality:      &CodeQualityDetector{},
+		graphAnalyzer:    &GraphAnalyzer{},
 		django:           &DjangoDetector{},
 		fastapi:          &FastAPIDetector{},
 		nestjsFw:         &NestJSDetector{},
@@ -183,6 +185,26 @@ func (e *Engine) runScoringAndMetrics(pkgs []domain.Package, cache *PkgCache, re
 
 	report.Hotspots = e.hotspots.Analyze(pkgs)
 	report.DataFlows = e.dataflow.Trace(pkgs, report.EntryPoints, report.ExternalDeps)
+
+	ga := e.graphAnalyzer.Analyze(pkgs)
+	graph, nodes := buildCallGraph(pkgs)
+	ga.Layers, ga.LayerSkips = assignLayers(graph, nodes)
+	community, _ := detectCommunities(graph, nodes)
+	ga.Misplaced = findMisplacedCode(pkgs, community)
+	ga.HenryKafura = computeHenryKafura(pkgs)
+	ga.DSMPackages, ga.DSMMatrix = buildDSM(pkgs)
+
+	commMap := make(map[int][]string)
+	for fn, c := range community {
+		commMap[c] = append(commMap[c], fn)
+	}
+	for id, members := range commMap {
+		if len(members) > 1 {
+			ga.Communities = append(ga.Communities, domain.CommunityInfo{ID: id, Members: members})
+		}
+	}
+
+	report.GraphAnalysis = ga
 	report.Summary = e.summary.Generate(report, pkgs)
 }
 

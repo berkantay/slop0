@@ -14,6 +14,66 @@ type Report struct {
 	Hotspots        []Hotspot
 	DataFlows       []DataFlowPath
 	Summary         Summary
+	GraphAnalysis   GraphAnalysis
+}
+
+type GraphAnalysis struct {
+	Bottlenecks     []Bottleneck
+	CoupledClusters []CoupledCluster
+	Layers          []LayerAssignment
+	LayerSkips      []LayerSkip
+	Communities     []CommunityInfo
+	Misplaced       []MisplacedCode
+	HenryKafura     []HenryKafuraResult
+	DSMPackages     []string
+	DSMMatrix       [][]int
+}
+
+type Bottleneck struct {
+	Function    string
+	Betweenness float64
+	PageRank    float64
+	BlastRadius int
+}
+
+type CoupledCluster struct {
+	Nodes        []string
+	Size         int
+	SuggestedCut string
+}
+
+type LayerAssignment struct {
+	Node  string
+	Layer int
+}
+
+type LayerSkip struct {
+	From      string
+	To        string
+	FromLayer int
+	ToLayer   int
+	Skip      int
+}
+
+type CommunityInfo struct {
+	ID      int
+	Members []string
+}
+
+type MisplacedCode struct {
+	Function         string
+	CurrentPackage   string
+	SuggestedPackage string
+	EdgesToCurrent   int
+	EdgesToSuggested int
+}
+
+type HenryKafuraResult struct {
+	Function string
+	IF       float64
+	Length   int
+	FanIn    int
+	FanOut   int
 }
 
 type EntryPoint struct {

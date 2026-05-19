@@ -35,6 +35,7 @@ func (r *CompactRenderer) renderOptionalSections(b *strings.Builder, report *dom
 	r.renderIfNonEmpty(b, len(report.Hotspots), func() { r.renderHotspots(b, report.Hotspots) })
 	r.renderIfNonEmpty(b, len(report.PkgMetrics), func() { r.renderPkgMetrics(b, report.PkgMetrics) })
 	r.renderIfNonEmpty(b, len(report.TypeMetrics), func() { r.renderTypeRoles(b, report.TypeMetrics) })
+	r.renderGraphAnalysis(b, &report.GraphAnalysis)
 }
 
 func (r *CompactRenderer) renderIfNonEmpty(_ *strings.Builder, count int, fn func()) {
