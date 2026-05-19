@@ -6,6 +6,15 @@ import (
 	"strings"
 )
 
+var tsSkipDirs = map[string]bool{
+	"node_modules": true, "dist": true, "build": true,
+	".next": true, "coverage": true,
+}
+
+func shouldSkipTSDir(name string) bool {
+	return tsSkipDirs[name] || strings.HasPrefix(name, ".")
+}
+
 func CollectTSFiles(dir string) ([]string, error) {
 	var files []string
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
@@ -17,20 +26,22 @@ func CollectTSFiles(dir string) ([]string, error) {
 			if name == "." || name == dir {
 				return nil
 			}
-			if name == "node_modules" || name == "dist" || name == "build" || name == ".next" || name == "coverage" || strings.HasPrefix(name, ".") {
+			if shouldSkipTSDir(name) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		ext := filepath.Ext(path)
-		if ext == ".ts" || ext == ".tsx" {
-			if !strings.HasSuffix(path, ".d.ts") {
-				files = append(files, path)
-			}
+		if isTSSourceFile(path) {
+			files = append(files, path)
 		}
 		return nil
 	})
 	return files, err
+}
+
+func isTSSourceFile(path string) bool {
+	ext := filepath.Ext(path)
+	return (ext == ".ts" || ext == ".tsx") && !strings.HasSuffix(path, ".d.ts")
 }
 
 func FileToModulePath(filePath, rootDir string) string {

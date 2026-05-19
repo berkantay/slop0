@@ -106,6 +106,21 @@ func (e *Engine) runPatternChecks(pkgs []domain.Package, thresholds domain.Thres
 		report.PatternIssues = append(report.PatternIssues, patterns...)
 	}
 
+	lang := detectProjectLang(pkgs)
+
+	switch lang {
+	case "go":
+		e.runGoPatternChecks(pkgs, thresholds, cache, report)
+	case "python":
+		report.PatternIssues = append(report.PatternIssues, e.pyIdiom.Detect(pkgs)...)
+	case "typescript":
+		report.PatternIssues = append(report.PatternIssues, e.tsIdiom.Detect(pkgs)...)
+	}
+
+	report.PatternIssues = e.confidence.ScoreIssues(report.PatternIssues, pkgs)
+}
+
+func (e *Engine) runGoPatternChecks(pkgs []domain.Package, thresholds domain.Thresholds, cache *PkgCache, report *domain.Report) {
 	report.PatternIssues = append(report.PatternIssues, e.inferrer.InferErrorPatternsFromCache(cache, thresholds)...)
 	report.PatternIssues = append(report.PatternIssues, e.idiom.DetectFromCache(cache)...)
 
@@ -119,11 +134,6 @@ func (e *Engine) runPatternChecks(pkgs []domain.Package, thresholds domain.Thres
 	if designPatterns, err := e.design.DetectFromCache(pkgs, cache); err == nil {
 		report.DesignPatterns = e.confidence.ScorePatterns(designPatterns, pkgs)
 	}
-
-	report.PatternIssues = append(report.PatternIssues, e.pyIdiom.Detect(pkgs)...)
-	report.PatternIssues = append(report.PatternIssues, e.tsIdiom.Detect(pkgs)...)
-
-	report.PatternIssues = e.confidence.ScoreIssues(report.PatternIssues, pkgs)
 }
 
 func (e *Engine) runScoringAndMetrics(pkgs []domain.Package, cache *PkgCache, report *domain.Report) {

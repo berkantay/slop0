@@ -20,12 +20,12 @@ type PatternParticipant = domain.PatternParticipant
 func (d *DesignPatternDetector) Detect(domainPkgs []domain.Package) ([]DetectedPattern, error) {
 	detected := detectModelPatterns(domainPkgs)
 
-	pkgs, fset, err := loadWithTypes(domainPkgs)
+	lr, err := loadWithTypes(domainPkgs)
 	if err != nil {
 		return detected, nil
 	}
 
-	detected = append(detected, detectTypePatterns(pkgs, fset)...)
+	detected = append(detected, detectTypePatterns(lr.Pkgs, lr.Fset)...)
 	return detected, nil
 }
 

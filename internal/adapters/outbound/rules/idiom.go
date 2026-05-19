@@ -17,17 +17,17 @@ import (
 type IdiomDetector struct{}
 
 func (d *IdiomDetector) Detect(domainPkgs []domain.Package) ([]domain.PatternIssue, error) {
-	pkgs, fset, err := loadWithTypes(domainPkgs)
+	lr, err := loadWithTypes(domainPkgs)
 	if err != nil {
 		return nil, fmt.Errorf("loading packages for idiom check: %w", err)
 	}
 
 	var issues []domain.PatternIssue
-	for _, pkg := range pkgs {
+	for _, pkg := range lr.Pkgs {
 		if pkg.Types == nil {
 			continue
 		}
-		issues = append(issues, detectIdiomIssuesInPkg(pkg, fset)...)
+		issues = append(issues, detectIdiomIssuesInPkg(pkg, lr.Fset)...)
 	}
 	return issues, nil
 }
@@ -71,18 +71,18 @@ func detectRedundantGetters(pkg *packages.Package, fset *token.FileSet) []domain
 }
 
 func checkRedundantGetter(decl ast.Decl, pkg *packages.Package, fname string, fset *token.FileSet, structFields map[string][]string) *domain.PatternIssue {
-	fn, recvType, prefix, stripped := extractGetterParts(decl, pkg)
-	if fn == nil {
+	gp := extractGetterParts(decl, pkg)
+	if gp.fn == nil {
 		return nil
 	}
 
-	for _, field := range structFields[recvType] {
-		if strings.EqualFold(field, stripped) && hasMatchingReturnType(fn, field, pkg.TypesInfo) {
-			pos := fset.Position(fn.Pos())
+	for _, field := range structFields[gp.recvType] {
+		if strings.EqualFold(field, gp.stripped) && hasMatchingReturnType(gp.fn, field, pkg.TypesInfo) {
+			pos := fset.Position(gp.fn.Pos())
 			return &domain.PatternIssue{
 				Category:  "naming/redundant-getter",
-				Dominant:  fmt.Sprintf("method accesses field %s — %s() is sufficient, %s prefix is redundant", field, stripped, prefix),
-				Violation: fmt.Sprintf("%s.%s on %s", pkg.Name, fn.Name.Name, recvType),
+				Dominant:  fmt.Sprintf("method accesses field %s — %s() is sufficient, %s prefix is redundant", field, gp.stripped, gp.prefix),
+				Violation: fmt.Sprintf("%s.%s on %s", pkg.Name, gp.fn.Name.Name, gp.recvType),
 				Locations: []domain.Location{{File: fname, Line: pos.Line}},
 			}
 		}
@@ -90,29 +90,36 @@ func checkRedundantGetter(decl ast.Decl, pkg *packages.Package, fname string, fs
 	return nil
 }
 
-func extractGetterParts(decl ast.Decl, pkg *packages.Package) (*ast.FuncDecl, string, string, string) {
+type getterParts struct {
+	fn       *ast.FuncDecl
+	recvType string
+	prefix   string
+	stripped string
+}
+
+func extractGetterParts(decl ast.Decl, pkg *packages.Package) getterParts {
 	fn, ok := decl.(*ast.FuncDecl)
 	if !ok || fn.Recv == nil || fn.Type.Results == nil {
-		return nil, "", "", ""
+		return getterParts{}
 	}
 
 	recvType := resolveReceiverType(fn.Recv.List[0].Type, pkg.TypesInfo)
 	if recvType == "" {
-		return nil, "", "", ""
+		return getterParts{}
 	}
 
 	name := fn.Name.Name
 	prefix := extractLeadingVerb(name)
 	if prefix == "" || len(name) < 4 {
-		return nil, "", "", ""
+		return getterParts{}
 	}
 
 	stripped := name[len(prefix):]
 	if stripped == "" {
-		return nil, "", "", ""
+		return getterParts{}
 	}
 
-	return fn, recvType, prefix, stripped
+	return getterParts{fn: fn, recvType: recvType, prefix: prefix, stripped: stripped}
 }
 
 func detectUnderscoredNames(pkg *packages.Package, fset *token.FileSet) []domain.PatternIssue {

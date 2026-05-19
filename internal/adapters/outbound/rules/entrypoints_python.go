@@ -163,46 +163,47 @@ func extractRouteFromDecorator(decorator string) string {
 
 func detectDjangoURLPatterns(pkg domain.Package, parser *sitter.Parser) []domain.EntryPoint {
 	var entries []domain.EntryPoint
+	entries = append(entries, detectDjangoURLsFromFunctions(pkg, parser)...)
+	entries = append(entries, detectDjangoURLsFromVariables(pkg, parser)...)
+	return entries
+}
 
+func detectDjangoURLsFromFunctions(pkg domain.Package, parser *sitter.Parser) []domain.EntryPoint {
 	for _, fn := range pkg.Functions {
-		if !strings.HasSuffix(fn.File, "urls.py") {
-			continue
+		if routes := parseDjangoURLFile(fn.File, parser); routes != nil {
+			return routes
 		}
-
-		src, err := os.ReadFile(fn.File)
-		if err != nil {
-			continue
-		}
-
-		tree, err := parser.ParseCtx(context.Background(), nil, src)
-		if err != nil {
-			continue
-		}
-
-		entries = append(entries, extractDjangoRoutes(tree.RootNode(), src, fn.File)...)
-		break
 	}
+	return nil
+}
 
+func detectDjangoURLsFromVariables(pkg domain.Package, parser *sitter.Parser) []domain.EntryPoint {
 	for _, v := range pkg.Variables {
-		if v.Name == "urlpatterns" {
-			for _, fn := range pkg.Functions {
-				if strings.HasSuffix(fn.File, "urls.py") {
-					src, err := os.ReadFile(fn.File)
-					if err != nil {
-						continue
-					}
-					tree, err := parser.ParseCtx(context.Background(), nil, src)
-					if err != nil {
-						continue
-					}
-					entries = append(entries, extractDjangoRoutes(tree.RootNode(), src, fn.File)...)
-					break
-				}
+		if v.Name != "urlpatterns" {
+			continue
+		}
+		for _, fn := range pkg.Functions {
+			if routes := parseDjangoURLFile(fn.File, parser); routes != nil {
+				return routes
 			}
 		}
 	}
+	return nil
+}
 
-	return entries
+func parseDjangoURLFile(file string, parser *sitter.Parser) []domain.EntryPoint {
+	if !strings.HasSuffix(file, "urls.py") {
+		return nil
+	}
+	src, err := os.ReadFile(file)
+	if err != nil {
+		return nil
+	}
+	tree, err := parser.ParseCtx(context.Background(), nil, src)
+	if err != nil {
+		return nil
+	}
+	return extractDjangoRoutes(tree.RootNode(), src, file)
 }
 
 func extractDjangoRoutes(root *sitter.Node, src []byte, file string) []domain.EntryPoint {

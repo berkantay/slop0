@@ -14,16 +14,16 @@ import (
 type CognitiveComplexityDetector struct{}
 
 func (d *CognitiveComplexityDetector) Detect(domainPkgs []domain.Package, t domain.Thresholds) ([]domain.PatternIssue, error) {
-	pkgs, fset, err := loadSyntaxOnly(domainPkgs)
+	lr, err := loadSyntaxOnly(domainPkgs)
 	if err != nil {
 		return nil, err
 	}
 
 	var issues []domain.PatternIssue
-	for _, pkg := range pkgs {
+	for _, pkg := range lr.Pkgs {
 		for _, file := range pkg.Syntax {
-			fname := filepath.Base(fset.File(file.Pos()).Name())
-			issues = append(issues, detectCogCycInFile(pkg, file, fname, fset, t)...)
+			fname := filepath.Base(lr.Fset.File(file.Pos()).Name())
+			issues = append(issues, detectCogCycInFile(pkg, file, fname, lr.Fset, t)...)
 		}
 	}
 	return issues, nil

@@ -6,35 +6,54 @@ import (
 	"strings"
 )
 
-func DetectLanguage(dir string) string {
-	goCount := 0
-	pyCount := 0
-	tsCount := 0
+var skipDirs = map[string]bool{
+	"vendor": true, "node_modules": true, ".git": true,
+	"__pycache__": true, ".venv": true, "venv": true,
+	"dist": true, "build": true,
+}
 
+func shouldSkipDir(name string) bool {
+	return skipDirs[name] || strings.HasPrefix(name, ".")
+}
+
+func DetectLanguage(dir string) string {
+	counts := countFilesByLang(dir)
+	best := pickBestLang(counts)
+	if best == "" {
+		return detectByMarkerFiles(dir)
+	}
+	return best
+}
+
+func countFilesByLang(dir string) map[string]int {
+	counts := map[string]int{"go": 0, "python": 0, "typescript": 0}
 	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			name := info.Name()
-			if name == "vendor" || name == "node_modules" || name == ".git" || name == "__pycache__" || name == ".venv" || name == "venv" || name == "dist" || name == "build" {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			if shouldSkipDir(info.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		ext := filepath.Ext(path)
-		switch ext {
+		switch filepath.Ext(path) {
 		case ".go":
-			goCount++
+			counts["go"]++
 		case ".py":
-			pyCount++
+			counts["python"]++
 		case ".ts", ".tsx":
 			if !strings.HasSuffix(path, ".d.ts") {
-				tsCount++
+				counts["typescript"]++
 			}
 		}
 		return nil
 	})
+	return counts
+}
 
-	counts := map[string]int{"go": goCount, "python": pyCount, "typescript": tsCount}
-	best := "go"
+func pickBestLang(counts map[string]int) string {
+	best := ""
 	bestCount := 0
 	for lang, count := range counts {
 		if count > bestCount {
@@ -42,11 +61,6 @@ func DetectLanguage(dir string) string {
 			best = lang
 		}
 	}
-
-	if bestCount == 0 {
-		return detectByMarkerFiles(dir)
-	}
-
 	return best
 }
 
@@ -93,7 +107,7 @@ func CollectPythonFiles(dir string) ([]string, error) {
 			if name == "." || name == dir {
 				return nil
 			}
-			if name == "__pycache__" || name == ".venv" || name == "venv" || name == ".git" || name == "node_modules" || strings.HasPrefix(name, ".") {
+			if shouldSkipDir(name) {
 				return filepath.SkipDir
 			}
 			return nil

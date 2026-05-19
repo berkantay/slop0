@@ -16,6 +16,14 @@ type CallGraphBuilder struct {
 	parser *sitter.Parser
 }
 
+type pyCallContext struct {
+	src       []byte
+	modPath   string
+	callerKey string
+	seen      map[string]bool
+	result    *outbound.CallGraphResult
+}
+
 func NewCallGraphBuilder() *CallGraphBuilder {
 	parser := sitter.NewParser()
 	parser.SetLanguage(python.GetLanguage())
@@ -93,8 +101,8 @@ func processFuncDef(node *sitter.Node, src []byte, modPath, className string, re
 		return
 	}
 
-	seen := make(map[string]bool)
-	collectCallsInBody(body, src, modPath, callerKey, seen, result)
+	ctx := &pyCallContext{src: src, modPath: modPath, callerKey: callerKey, seen: make(map[string]bool), result: result}
+	collectCallsInBody(body, ctx)
 }
 
 func processClassDef(node *sitter.Node, src []byte, modPath string, result *outbound.CallGraphResult) {
@@ -105,37 +113,37 @@ func processClassDef(node *sitter.Node, src []byte, modPath string, result *outb
 	}
 }
 
-func collectCallsInBody(node *sitter.Node, src []byte, modPath, callerKey string, seen map[string]bool, result *outbound.CallGraphResult) {
+func collectCallsInBody(node *sitter.Node, ctx *pyCallContext) {
 	for i := 0; i < int(node.NamedChildCount()); i++ {
 		child := node.NamedChild(i)
-		findCallsRecursive(child, src, modPath, callerKey, seen, result)
+		findCallsRecursive(child, ctx)
 	}
 }
 
-func findCallsRecursive(node *sitter.Node, src []byte, modPath, callerKey string, seen map[string]bool, result *outbound.CallGraphResult) {
+func findCallsRecursive(node *sitter.Node, ctx *pyCallContext) {
 	if node.Type() == "call" {
-		recordCall(node, src, modPath, callerKey, seen, result)
+		recordCall(node, ctx)
 	}
 
 	for i := 0; i < int(node.NamedChildCount()); i++ {
-		findCallsRecursive(node.NamedChild(i), src, modPath, callerKey, seen, result)
+		findCallsRecursive(node.NamedChild(i), ctx)
 	}
 }
 
-func recordCall(node *sitter.Node, src []byte, modPath, callerKey string, seen map[string]bool, result *outbound.CallGraphResult) {
+func recordCall(node *sitter.Node, ctx *pyCallContext) {
 	fn := node.ChildByFieldName("function")
 	if fn == nil {
 		return
 	}
 
-	calleeKey := resolveCallee(fn, src, modPath)
-	if calleeKey == "" || calleeKey == callerKey || seen[calleeKey] {
+	calleeKey := resolveCallee(fn, ctx.src, ctx.modPath)
+	if calleeKey == "" || calleeKey == ctx.callerKey || ctx.seen[calleeKey] {
 		return
 	}
-	seen[calleeKey] = true
+	ctx.seen[calleeKey] = true
 
-	result.Calls[callerKey] = append(result.Calls[callerKey], calleeKey)
-	result.CalledBy[calleeKey] = append(result.CalledBy[calleeKey], callerKey)
+	ctx.result.Calls[ctx.callerKey] = append(ctx.result.Calls[ctx.callerKey], calleeKey)
+	ctx.result.CalledBy[calleeKey] = append(ctx.result.CalledBy[calleeKey], ctx.callerKey)
 }
 
 func resolveCallee(fn *sitter.Node, src []byte, modPath string) string {

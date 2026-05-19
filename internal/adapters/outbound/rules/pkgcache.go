@@ -17,15 +17,13 @@ type PkgCache struct {
 
 func NewPkgCache(domainPkgs []domain.Package) *PkgCache {
 	c := &PkgCache{}
-	syntaxPkgs, syntaxFset, err := loadSyntaxOnly(domainPkgs)
-	if err == nil {
-		c.syntaxPkgs = syntaxPkgs
-		c.syntaxFset = syntaxFset
+	if lr, err := loadSyntaxOnly(domainPkgs); err == nil {
+		c.syntaxPkgs = lr.Pkgs
+		c.syntaxFset = lr.Fset
 	}
-	typedPkgs, typedFset, err := loadWithTypes(domainPkgs)
-	if err == nil {
-		c.typedPkgs = typedPkgs
-		c.typedFset = typedFset
+	if lr, err := loadWithTypes(domainPkgs); err == nil {
+		c.typedPkgs = lr.Pkgs
+		c.typedFset = lr.Fset
 	}
 	return c
 }

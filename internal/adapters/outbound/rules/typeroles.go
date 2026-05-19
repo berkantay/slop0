@@ -36,44 +36,55 @@ func (c *TypeRoleClassifier) Classify(domainPkgs []domain.Package) ([]domain.Typ
 	externalDeps := computeExternalFieldDeps(pkgs)
 	lcom4 := computeLCOM4(pkgs, cfg.Fset)
 
+	agg := &typeAggregates{fanIn, fanOut, fieldCounts, methodCounts, implCounts, externalDeps, lcom4}
+	return collectTypeMetrics(pkgs, agg), nil
+}
+
+type typeAggregates struct {
+	fanIn       map[string]int
+	fanOut      map[string]int
+	fieldCounts map[string]int
+	methodCounts map[string]int
+	implCounts  map[string]int
+	externalDeps map[string]bool
+	lcom4       map[string]int
+}
+
+func collectTypeMetrics(pkgs []*packages.Package, agg *typeAggregates) []domain.TypeMetrics {
 	var metrics []domain.TypeMetrics
 	for _, pkg := range pkgs {
-		scope := pkg.Types.Scope()
-		for _, name := range scope.Names() {
-			obj := scope.Lookup(name)
-			named, ok := obj.Type().(*types.Named)
-			if !ok {
-				continue
-			}
-			if _, ok := named.Underlying().(*types.Struct); !ok {
-				continue
-			}
-
-			key := pkg.PkgPath + "." + name
-			fi := fanIn[key]
-			fo := fanOut[key]
-			fields := fieldCounts[key]
-			methods := methodCounts[key]
-			impls := implCounts[key]
-			hasExtDep := externalDeps[key]
-			cohesion := lcom4[key]
-
-			role := classifyRole(roleMetrics{fi, fo, fields, methods, impls, hasExtDep})
-
-			metrics = append(metrics, domain.TypeMetrics{
-				Name:        name,
-				Package:     pkg.PkgPath,
-				Role:        role,
-				FanIn:       fi,
-				FanOut:      fo,
-				FieldCount:  fields,
-				MethodCount: methods,
-				LCOM4:       cohesion,
-			})
-		}
+		metrics = append(metrics, collectPkgTypeMetrics(pkg, agg)...)
 	}
+	return metrics
+}
 
-	return metrics, nil
+func collectPkgTypeMetrics(pkg *packages.Package, agg *typeAggregates) []domain.TypeMetrics {
+	var metrics []domain.TypeMetrics
+	scope := pkg.Types.Scope()
+	for _, name := range scope.Names() {
+		obj := scope.Lookup(name)
+		named, ok := obj.Type().(*types.Named)
+		if !ok {
+			continue
+		}
+		if _, ok := named.Underlying().(*types.Struct); !ok {
+			continue
+		}
+
+		key := pkg.PkgPath + "." + name
+		m := roleMetrics{agg.fanIn[key], agg.fanOut[key], agg.fieldCounts[key], agg.methodCounts[key], agg.implCounts[key], agg.externalDeps[key]}
+		metrics = append(metrics, domain.TypeMetrics{
+			Name:        name,
+			Package:     pkg.PkgPath,
+			Role:        classifyRole(m),
+			FanIn:       m.fanIn,
+			FanOut:      m.fanOut,
+			FieldCount:  m.fields,
+			MethodCount: m.methods,
+			LCOM4:       agg.lcom4[key],
+		})
+	}
+	return metrics
 }
 
 type roleMetrics struct {

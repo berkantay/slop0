@@ -180,25 +180,45 @@ func extractInitFields(initNode *sitter.Node, src []byte) []domain.Field {
 func walkForSelfAssignments(node *sitter.Node, src []byte, fields *[]domain.Field) {
 	for i := 0; i < int(node.NamedChildCount()); i++ {
 		child := node.NamedChild(i)
-		if child.Type() == "expression_statement" {
-			assign := child.NamedChild(0)
-			if assign != nil && assign.Type() == "assignment" {
-				left := assign.ChildByFieldName("left")
-				if left != nil && left.Type() == "attribute" {
-					obj := left.ChildByFieldName("object")
-					attr := left.ChildByFieldName("attribute")
-					if obj != nil && nodeText(obj, src) == "self" && attr != nil {
-						fieldName := nodeText(attr, src)
-						typeHint := inferFieldType(assign, src)
-						*fields = append(*fields, domain.Field{
-							Name: fieldName,
-							Type: typeHint,
-						})
-					}
-				}
-			}
+		if f := extractSelfAssignment(child, src); f != nil {
+			*fields = append(*fields, *f)
 		}
 	}
+}
+
+func extractSelfAssignment(node *sitter.Node, src []byte) *domain.Field {
+	if node.Type() != "expression_statement" {
+		return nil
+	}
+	assign := node.NamedChild(0)
+	if assign == nil || assign.Type() != "assignment" {
+		return nil
+	}
+	left := assign.ChildByFieldName("left")
+	if left == nil || left.Type() != "attribute" {
+		return nil
+	}
+	obj := left.ChildByFieldName("object")
+	attr := left.ChildByFieldName("attribute")
+	if obj == nil || nodeText(obj, src) != "self" || attr == nil {
+		return nil
+	}
+	return &domain.Field{
+		Name: nodeText(attr, src),
+		Type: inferFieldType(assign, src),
+	}
+}
+
+var pyTypeMap = map[string]string{
+	"string":              "str",
+	"concatenated_string": "str",
+	"integer":             "int",
+	"float":               "float",
+	"true":                "bool",
+	"false":               "bool",
+	"list":                "list",
+	"dictionary":          "dict",
+	"none":                "None",
 }
 
 func inferFieldType(assign *sitter.Node, src []byte) string {
@@ -206,22 +226,10 @@ func inferFieldType(assign *sitter.Node, src []byte) string {
 	if right == nil {
 		return ""
 	}
-	switch right.Type() {
-	case "string", "concatenated_string":
-		return "str"
-	case "integer":
-		return "int"
-	case "float":
-		return "float"
-	case "true", "false":
-		return "bool"
-	case "list":
-		return "list"
-	case "dictionary":
-		return "dict"
-	case "none":
-		return "None"
-	case "call":
+	if t, ok := pyTypeMap[right.Type()]; ok {
+		return t
+	}
+	if right.Type() == "call" {
 		fn := right.ChildByFieldName("function")
 		if fn != nil {
 			return nodeText(fn, src)

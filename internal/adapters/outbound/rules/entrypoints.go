@@ -23,7 +23,7 @@ type EntryPoint struct {
 }
 
 func (d *EntryPointDetector) Detect(domainPkgs []domain.Package) ([]domain.EntryPoint, error) {
-	pkgs, fset, err := loadPackagesForAnalysis(domainPkgs,
+	lr, err := loadPackagesForAnalysis(domainPkgs,
 		packages.NeedName|packages.NeedFiles|packages.NeedSyntax|
 			packages.NeedTypes|packages.NeedTypesInfo|packages.NeedImports)
 	if err != nil {
@@ -31,11 +31,11 @@ func (d *EntryPointDetector) Detect(domainPkgs []domain.Package) ([]domain.Entry
 	}
 
 	var entries []domain.EntryPoint
-	for _, pkg := range pkgs {
+	for _, pkg := range lr.Pkgs {
 		if pkg.TypesInfo == nil {
 			continue
 		}
-		entries = append(entries, detectEntryPointsInPkg(pkg, fset)...)
+		entries = append(entries, detectEntryPointsInPkg(pkg, lr.Fset)...)
 	}
 	return entries, nil
 }

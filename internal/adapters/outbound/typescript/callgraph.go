@@ -16,6 +16,14 @@ type CallGraphBuilder struct {
 	parser *sitter.Parser
 }
 
+type tsCallContext struct {
+	src       []byte
+	modPath   string
+	callerKey string
+	seen      map[string]bool
+	result    *outbound.CallGraphResult
+}
+
 func NewCallGraphBuilder() *CallGraphBuilder {
 	parser := sitter.NewParser()
 	parser.SetLanguage(typescript.GetLanguage())
@@ -126,34 +134,34 @@ func collectTSCallsInBody(body *sitter.Node, src []byte, modPath, callerKey stri
 	if body == nil {
 		return
 	}
-	seen := make(map[string]bool)
-	findTSCallsRecursive(body, src, modPath, callerKey, seen, result)
+	ctx := &tsCallContext{src: src, modPath: modPath, callerKey: callerKey, seen: make(map[string]bool), result: result}
+	findTSCallsRecursive(body, ctx)
 }
 
-func findTSCallsRecursive(node *sitter.Node, src []byte, modPath, callerKey string, seen map[string]bool, result *outbound.CallGraphResult) {
+func findTSCallsRecursive(node *sitter.Node, ctx *tsCallContext) {
 	if node.Type() == "call_expression" {
-		recordTSCall(node, src, modPath, callerKey, seen, result)
+		recordTSCall(node, ctx)
 	}
 
 	for i := 0; i < int(node.NamedChildCount()); i++ {
-		findTSCallsRecursive(node.NamedChild(i), src, modPath, callerKey, seen, result)
+		findTSCallsRecursive(node.NamedChild(i), ctx)
 	}
 }
 
-func recordTSCall(node *sitter.Node, src []byte, modPath, callerKey string, seen map[string]bool, result *outbound.CallGraphResult) {
+func recordTSCall(node *sitter.Node, ctx *tsCallContext) {
 	fn := node.ChildByFieldName("function")
 	if fn == nil {
 		return
 	}
 
-	calleeKey := resolveTSCallee(fn, src, modPath)
-	if calleeKey == "" || calleeKey == callerKey || seen[calleeKey] {
+	calleeKey := resolveTSCallee(fn, ctx.src, ctx.modPath)
+	if calleeKey == "" || calleeKey == ctx.callerKey || ctx.seen[calleeKey] {
 		return
 	}
-	seen[calleeKey] = true
+	ctx.seen[calleeKey] = true
 
-	result.Calls[callerKey] = append(result.Calls[callerKey], calleeKey)
-	result.CalledBy[calleeKey] = append(result.CalledBy[calleeKey], callerKey)
+	ctx.result.Calls[ctx.callerKey] = append(ctx.result.Calls[ctx.callerKey], calleeKey)
+	ctx.result.CalledBy[calleeKey] = append(ctx.result.CalledBy[calleeKey], ctx.callerKey)
 }
 
 func resolveTSCallee(fn *sitter.Node, src []byte, modPath string) string {

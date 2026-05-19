@@ -193,13 +193,13 @@ func inferErrorViolations(profiles []pkgErrorProfile, t domain.Thresholds) []dom
 	}
 
 	styleCounts, stylePkgs := aggregateErrorStyles(profiles)
-	dominantStyle, maxCount, total := findDominantStyle(styleCounts)
+	ds := findDominantStyle(styleCounts)
 
-	if total < t.PatternMinSamples || float64(maxCount)/float64(total) < t.PatternDominance {
+	if ds.total < t.PatternMinSamples || float64(ds.maxCount)/float64(ds.total) < t.PatternDominance {
 		return nil
 	}
 
-	return collectErrorViolations(profiles, dominantStyle, stylePkgs)
+	return collectErrorViolations(profiles, ds.style, stylePkgs)
 }
 
 func aggregateErrorStyles(profiles []pkgErrorProfile) (map[errorStyle]int, map[errorStyle][]string) {
@@ -218,18 +218,22 @@ func aggregateErrorStyles(profiles []pkgErrorProfile) (map[errorStyle]int, map[e
 	return styleCounts, stylePkgs
 }
 
-func findDominantStyle(styleCounts map[errorStyle]int) (errorStyle, int, int) {
-	var dominantStyle errorStyle
-	maxCount := 0
-	total := 0
+type dominantStyleResult struct {
+	style    errorStyle
+	maxCount int
+	total    int
+}
+
+func findDominantStyle(styleCounts map[errorStyle]int) dominantStyleResult {
+	var r dominantStyleResult
 	for style, count := range styleCounts {
-		total += count
-		if count > maxCount {
-			maxCount = count
-			dominantStyle = style
+		r.total += count
+		if count > r.maxCount {
+			r.maxCount = count
+			r.style = style
 		}
 	}
-	return dominantStyle, maxCount, total
+	return r
 }
 
 func collectErrorViolations(profiles []pkgErrorProfile, dominantStyle errorStyle, stylePkgs map[errorStyle][]string) []domain.PatternIssue {

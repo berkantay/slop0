@@ -10,13 +10,13 @@ import (
 type HotspotAnalyzer struct{}
 
 func (h *HotspotAnalyzer) Analyze(pkgs []domain.Package) []domain.Hotspot {
-	graph, reverseGraph, nodes := buildFuncGraph(pkgs)
+	fg := buildFuncGraph(pkgs)
 
-	pagerank := computePageRank(graph, nodes, 0.85, 30)
-	blastRadius := computeBlastRadius(reverseGraph, nodes)
+	pagerank := computePageRank(fg.graph, fg.nodes, 0.85, 30)
+	blastRadius := computeBlastRadius(fg.reverseGraph, fg.nodes)
 
 	var hotspots []domain.Hotspot
-	for _, node := range nodes {
+	for _, node := range fg.nodes {
 		pr := pagerank[node]
 		br := blastRadius[node]
 		if pr < 0.001 && br < 3 {
@@ -41,7 +41,13 @@ func (h *HotspotAnalyzer) Analyze(pkgs []domain.Package) []domain.Hotspot {
 	return hotspots
 }
 
-func buildFuncGraph(pkgs []domain.Package) (map[string][]string, map[string][]string, []string) {
+type funcGraph struct {
+	graph        map[string][]string
+	reverseGraph map[string][]string
+	nodes        []string
+}
+
+func buildFuncGraph(pkgs []domain.Package) funcGraph {
 	graph := make(map[string][]string)
 	reverseGraph := make(map[string][]string)
 	nodeSet := make(map[string]bool)
@@ -63,7 +69,7 @@ func buildFuncGraph(pkgs []domain.Package) (map[string][]string, map[string][]st
 	for n := range nodeSet {
 		nodes = append(nodes, n)
 	}
-	return graph, reverseGraph, nodes
+	return funcGraph{graph: graph, reverseGraph: reverseGraph, nodes: nodes}
 }
 
 func computePageRank(graph map[string][]string, nodes []string, damping float64, iterations int) map[string]float64 {

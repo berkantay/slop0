@@ -15,14 +15,14 @@ import (
 type ComplexityDetector struct{}
 
 func (d *ComplexityDetector) Detect(domainPkgs []domain.Package, t domain.Thresholds) ([]domain.PatternIssue, error) {
-	pkgs, fset, err := loadSyntaxOnly(domainPkgs)
+	lr, err := loadSyntaxOnly(domainPkgs)
 	if err != nil {
 		return nil, fmt.Errorf("loading packages for complexity check: %w", err)
 	}
 
 	var issues []domain.PatternIssue
-	for _, pkg := range pkgs {
-		issues = append(issues, detectComplexityIssuesInPkg(pkg, fset, t)...)
+	for _, pkg := range lr.Pkgs {
+		issues = append(issues, detectComplexityIssuesInPkg(pkg, lr.Fset, t)...)
 	}
 	return issues, nil
 }
