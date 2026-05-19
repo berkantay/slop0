@@ -9,49 +9,67 @@ import (
 func DetectLanguage(dir string) string {
 	goCount := 0
 	pyCount := 0
+	tsCount := 0
 
 	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			name := info.Name()
-			if name == "vendor" || name == "node_modules" || name == ".git" || name == "__pycache__" || name == ".venv" || name == "venv" {
+			if name == "vendor" || name == "node_modules" || name == ".git" || name == "__pycache__" || name == ".venv" || name == "venv" || name == "dist" || name == "build" {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		switch filepath.Ext(path) {
+		ext := filepath.Ext(path)
+		switch ext {
 		case ".go":
 			goCount++
 		case ".py":
 			pyCount++
+		case ".ts", ".tsx":
+			if !strings.HasSuffix(path, ".d.ts") {
+				tsCount++
+			}
 		}
 		return nil
 	})
 
-	if goCount > 0 && pyCount == 0 {
-		return "go"
-	}
-	if pyCount > 0 && goCount == 0 {
-		return "python"
+	counts := map[string]int{"go": goCount, "python": pyCount, "typescript": tsCount}
+	best := "go"
+	bestCount := 0
+	for lang, count := range counts {
+		if count > bestCount {
+			bestCount = count
+			best = lang
+		}
 	}
 
-	if goCount > 0 && pyCount > 0 {
+	if bestCount == 0 {
 		return detectByMarkerFiles(dir)
 	}
 
-	return "go"
+	return best
 }
 
 func detectByMarkerFiles(dir string) string {
 	goMarkers := []string{"go.mod", "go.sum"}
 	pyMarkers := []string{"pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile"}
+	tsMarkers := []string{"tsconfig.json", "package.json"}
 
-	goScore := countMarkers(dir, goMarkers)
-	pyScore := countMarkers(dir, pyMarkers)
-
-	if pyScore > goScore {
-		return "python"
+	scores := map[string]int{
+		"go":         countMarkers(dir, goMarkers),
+		"python":     countMarkers(dir, pyMarkers),
+		"typescript": countMarkers(dir, tsMarkers),
 	}
-	return "go"
+
+	best := "go"
+	bestScore := 0
+	for lang, score := range scores {
+		if score > bestScore {
+			bestScore = score
+			best = lang
+		}
+	}
+	return best
 }
 
 func countMarkers(dir string, markers []string) int {

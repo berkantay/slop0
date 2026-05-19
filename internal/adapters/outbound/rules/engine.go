@@ -29,6 +29,9 @@ type Engine struct {
 	pyEntryPoints    *PythonEntryPointDetector
 	pyIdiom          *PythonIdiomDetector
 	pyBoundaries     *PythonBoundaryDetector
+	tsEntryPoints    *TypeScriptEntryPointDetector
+	tsIdiom          *TypeScriptIdiomDetector
+	tsBoundaries     *TypeScriptBoundaryDetector
 }
 
 func NewEngine() *Engine {
@@ -55,6 +58,9 @@ func NewEngine() *Engine {
 		pyEntryPoints:    NewPythonEntryPointDetector(),
 		pyIdiom:          NewPythonIdiomDetector(),
 		pyBoundaries:     &PythonBoundaryDetector{},
+		tsEntryPoints:    &TypeScriptEntryPointDetector{},
+		tsIdiom:          &TypeScriptIdiomDetector{},
+		tsBoundaries:     &TypeScriptBoundaryDetector{},
 	}
 }
 
@@ -115,6 +121,7 @@ func (e *Engine) runPatternChecks(pkgs []domain.Package, thresholds domain.Thres
 	}
 
 	report.PatternIssues = append(report.PatternIssues, e.pyIdiom.Detect(pkgs)...)
+	report.PatternIssues = append(report.PatternIssues, e.tsIdiom.Detect(pkgs)...)
 
 	report.PatternIssues = e.confidence.ScoreIssues(report.PatternIssues, pkgs)
 }
@@ -122,22 +129,22 @@ func (e *Engine) runPatternChecks(pkgs []domain.Package, thresholds domain.Thres
 func (e *Engine) runScoringAndMetrics(pkgs []domain.Package, cache *PkgCache, report *domain.Report) {
 	report.PkgMetrics = e.pkgMetrics.Calculate(pkgs)
 
-	isPython := isPythonProject(pkgs)
+	lang := detectProjectLang(pkgs)
 
-	if !isPython {
+	switch lang {
+	case "python":
+		report.EntryPoints = e.pyEntryPoints.Detect(pkgs)
+		report.ExternalDeps = e.pyBoundaries.Detect(pkgs)
+	case "typescript":
+		report.EntryPoints = e.tsEntryPoints.Detect(pkgs)
+		report.ExternalDeps = e.tsBoundaries.Detect(pkgs)
+	default:
 		typedPkgs, typedFset := cache.Typed()
 		report.TypeMetrics = e.typeRoles.ClassifyFromLoaded(pkgs, typedPkgs, typedFset)
 		report.EntryPoints = e.entryPoints.DetectFromLoaded(typedPkgs, typedFset)
-	} else {
-		report.EntryPoints = e.pyEntryPoints.Detect(pkgs)
-	}
-
-	if !isPython {
 		if extDeps, err := e.boundaries.Detect(pkgs); err == nil {
 			report.ExternalDeps = extDeps
 		}
-	} else {
-		report.ExternalDeps = e.pyBoundaries.Detect(pkgs)
 	}
 
 	report.Hotspots = e.hotspots.Analyze(pkgs)
@@ -145,13 +152,16 @@ func (e *Engine) runScoringAndMetrics(pkgs []domain.Package, cache *PkgCache, re
 	report.Summary = e.summary.Generate(report, pkgs)
 }
 
-func isPythonProject(pkgs []domain.Package) bool {
+func detectProjectLang(pkgs []domain.Package) string {
 	for _, pkg := range pkgs {
 		for _, fn := range pkg.Functions {
 			if strings.HasSuffix(fn.File, ".py") {
-				return true
+				return "python"
+			}
+			if strings.HasSuffix(fn.File, ".ts") || strings.HasSuffix(fn.File, ".tsx") {
+				return "typescript"
 			}
 		}
 	}
-	return false
+	return "go"
 }
