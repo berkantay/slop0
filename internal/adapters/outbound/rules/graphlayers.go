@@ -17,18 +17,26 @@ func assignLayers(graph map[string][]string, nodes []string) ([]domain.LayerAssi
 }
 
 func condenseGraph(graph map[string][]string, sccs [][]string) (map[string][]string, map[string]string) {
+	nodeToSCC := buildNodeToSCCMap(sccs)
+	condensed := deduplicateEdges(graph, nodeToSCC)
+	return condensed, nodeToSCC
+}
+
+func buildNodeToSCCMap(sccs [][]string) map[string]string {
 	nodeToSCC := make(map[string]string)
-	for i, scc := range sccs {
+	for _, scc := range sccs {
 		label := scc[0]
 		if len(scc) > 1 {
 			label = strings.Join(scc, "+")
 		}
-		_ = i
 		for _, n := range scc {
 			nodeToSCC[n] = label
 		}
 	}
+	return nodeToSCC
+}
 
+func deduplicateEdges(graph map[string][]string, nodeToSCC map[string]string) map[string][]string {
 	condensed := make(map[string][]string)
 	seen := make(map[string]map[string]bool)
 	for node, targets := range graph {
@@ -47,7 +55,7 @@ func condenseGraph(graph map[string][]string, sccs [][]string) (map[string][]str
 			}
 		}
 	}
-	return condensed, nodeToSCC
+	return condensed
 }
 
 func topologicalLayers(dag map[string][]string) map[string]int {
@@ -155,9 +163,10 @@ func detectCommunities(graph map[string][]string, nodes []string) (map[string]in
 		return community, 0
 	}
 
-	improved := true
-	for improved {
-		improved = louvainPass(nodes, undirected, community, degree, m)
+	for iter := 0; iter < 50; iter++ {
+		if !louvainPass(nodes, undirected, community, degree, m) {
+			break
+		}
 	}
 
 	q := computeModularity(undirected, community, degree, m)
@@ -200,16 +209,17 @@ func totalEdges(degree map[string]int) float64 {
 }
 
 func louvainPass(nodes []string, graph map[string][]string, community map[string]int, degree map[string]int, m float64) bool {
+	commTotals := precomputeCommTotals(community, degree)
 	improved := false
+
 	for _, v := range nodes {
 		bestComm := community[v]
 		bestDelta := 0.0
 
-		neighbors := graph[v]
-		commEdges := countCommunityEdges(neighbors, community)
+		commEdges := countCommunityEdges(graph[v], community)
 
 		for c, kIn := range commEdges {
-			delta := deltaModularity(kIn, sumTot(community, degree, c), degree[v], m)
+			delta := deltaModularity(kIn, commTotals[c], degree[v], m)
 			if delta > bestDelta {
 				bestDelta = delta
 				bestComm = c
@@ -217,11 +227,23 @@ func louvainPass(nodes []string, graph map[string][]string, community map[string
 		}
 
 		if bestComm != community[v] {
+			oldComm := community[v]
+			ki := float64(degree[v])
+			commTotals[oldComm] -= ki
+			commTotals[bestComm] += ki
 			community[v] = bestComm
 			improved = true
 		}
 	}
 	return improved
+}
+
+func precomputeCommTotals(community map[string]int, degree map[string]int) map[int]float64 {
+	totals := make(map[int]float64)
+	for n, c := range community {
+		totals[c] += float64(degree[n])
+	}
+	return totals
 }
 
 func countCommunityEdges(neighbors []string, community map[string]int) map[int]float64 {
@@ -230,16 +252,6 @@ func countCommunityEdges(neighbors []string, community map[string]int) map[int]f
 		edges[community[n]]++
 	}
 	return edges
-}
-
-func sumTot(community map[string]int, degree map[string]int, c int) float64 {
-	total := 0.0
-	for n, comm := range community {
-		if comm == c {
-			total += float64(degree[n])
-		}
-	}
-	return total
 }
 
 func deltaModularity(kIn, sumTotal float64, ki int, m float64) float64 {
@@ -402,10 +414,24 @@ func buildPkgImportGraph(pkgs []domain.Package) (map[string]map[string]int, []st
 }
 
 func topologicalSortPkgs(graph map[string]map[string]int, names []string) []string {
-	inDeg := make(map[string]int)
-	nameSet := make(map[string]bool)
+	nameSet := toStringSet(names)
+	inDeg := computePkgInDegrees(graph, nameSet)
+	queue := initZeroDegreeQueue(names, inDeg)
+	order := drainTopologicalQueue(graph, nameSet, inDeg, queue)
+	return appendMissing(order, names)
+}
+
+func toStringSet(names []string) map[string]bool {
+	s := make(map[string]bool, len(names))
 	for _, n := range names {
-		nameSet[n] = true
+		s[n] = true
+	}
+	return s
+}
+
+func computePkgInDegrees(graph map[string]map[string]int, nameSet map[string]bool) map[string]int {
+	inDeg := make(map[string]int)
+	for n := range nameSet {
 		inDeg[n] = 0
 	}
 	for _, targets := range graph {
@@ -415,14 +441,20 @@ func topologicalSortPkgs(graph map[string]map[string]int, names []string) []stri
 			}
 		}
 	}
+	return inDeg
+}
 
+func initZeroDegreeQueue(names []string, inDeg map[string]int) []string {
 	var queue []string
 	for _, n := range names {
 		if inDeg[n] == 0 {
 			queue = append(queue, n)
 		}
 	}
+	return queue
+}
 
+func drainTopologicalQueue(graph map[string]map[string]int, nameSet map[string]bool, inDeg map[string]int, queue []string) []string {
 	var order []string
 	for len(queue) > 0 {
 		v := queue[0]
@@ -438,20 +470,19 @@ func topologicalSortPkgs(graph map[string]map[string]int, names []string) []stri
 			}
 		}
 	}
+	return order
+}
 
+func appendMissing(order []string, names []string) []string {
+	present := make(map[string]bool, len(order))
+	for _, o := range order {
+		present[o] = true
+	}
 	for _, n := range names {
-		found := false
-		for _, o := range order {
-			if o == n {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !present[n] {
 			order = append(order, n)
 		}
 	}
-
 	return order
 }
 

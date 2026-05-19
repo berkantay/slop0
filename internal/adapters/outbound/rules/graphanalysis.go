@@ -38,9 +38,19 @@ func buildCallGraph(pkgs []domain.Package) (map[string][]string, []string) {
 }
 
 func findBottlenecks(graph map[string][]string, nodes []string, pkgs []domain.Package) []domain.Bottleneck {
+	if len(nodes) > 5000 {
+		return nil
+	}
+
 	bc := brandesBetweenness(graph, nodes)
 	pr := simplePageRank(graph, nodes)
-	br := blastRadii(graph, nodes)
+
+	reverse := make(map[string][]string)
+	for node, targets := range graph {
+		for _, t := range targets {
+			reverse[t] = append(reverse[t], node)
+		}
+	}
 
 	mean, stddev := meanStddev(bc, nodes)
 	threshold := mean + 2*stddev
@@ -52,7 +62,7 @@ func findBottlenecks(graph map[string][]string, nodes []string, pkgs []domain.Pa
 				Function:    n,
 				Betweenness: math.Round(bc[n]*10000) / 10000,
 				PageRank:    math.Round(pr[n]*10000) / 10000,
-				BlastRadius: br[n],
+				BlastRadius: bfsCount(n, reverse),
 			})
 		}
 	}
@@ -74,38 +84,47 @@ func brandesBetweenness(graph map[string][]string, nodes []string) map[string]fl
 	return cb
 }
 
-func brandesFromSource(s string, graph map[string][]string, nodes []string, cb map[string]float64) {
-	var stack []string
-	pred := make(map[string][]string)
-	sigma := make(map[string]float64)
-	dist := make(map[string]int)
-
-	for _, n := range nodes {
-		dist[n] = -1
-	}
-	sigma[s] = 1
-	dist[s] = 0
-
-	queue := []string{s}
-	for len(queue) > 0 {
-		v := queue[0]
-		queue = queue[1:]
-		stack = append(stack, v)
-		brandesProcessNeighbors(v, graph[v], dist, sigma, pred, &queue)
-	}
-
-	brandesBackPropagate(stack, s, pred, sigma, cb)
+type brandesContext struct {
+	dist  map[string]int
+	sigma map[string]float64
+	pred  map[string][]string
+	queue []string
 }
 
-func brandesProcessNeighbors(v string, neighbors []string, dist map[string]int, sigma map[string]float64, pred map[string][]string, queue *[]string) {
+func brandesFromSource(s string, graph map[string][]string, nodes []string, cb map[string]float64) {
+	ctx := &brandesContext{
+		dist:  make(map[string]int),
+		sigma: make(map[string]float64),
+		pred:  make(map[string][]string),
+	}
+
+	for _, n := range nodes {
+		ctx.dist[n] = -1
+	}
+	ctx.sigma[s] = 1
+	ctx.dist[s] = 0
+
+	var stack []string
+	ctx.queue = []string{s}
+	for len(ctx.queue) > 0 {
+		v := ctx.queue[0]
+		ctx.queue = ctx.queue[1:]
+		stack = append(stack, v)
+		ctx.processNeighbors(v, graph[v])
+	}
+
+	brandesBackPropagate(stack, s, ctx.pred, ctx.sigma, cb)
+}
+
+func (ctx *brandesContext) processNeighbors(v string, neighbors []string) {
 	for _, w := range neighbors {
-		if dist[w] < 0 {
-			dist[w] = dist[v] + 1
-			*queue = append(*queue, w)
+		if ctx.dist[w] < 0 {
+			ctx.dist[w] = ctx.dist[v] + 1
+			ctx.queue = append(ctx.queue, w)
 		}
-		if dist[w] == dist[v]+1 {
-			sigma[w] += sigma[v]
-			pred[w] = append(pred[w], v)
+		if ctx.dist[w] == ctx.dist[v]+1 {
+			ctx.sigma[w] += ctx.sigma[v]
+			ctx.pred[w] = append(ctx.pred[w], v)
 		}
 	}
 }
@@ -169,21 +188,6 @@ func buildOutDegreeMap(graph map[string][]string) map[string]int {
 		deg[node] = len(targets)
 	}
 	return deg
-}
-
-func blastRadii(graph map[string][]string, nodes []string) map[string]int {
-	reverse := make(map[string][]string)
-	for node, targets := range graph {
-		for _, t := range targets {
-			reverse[t] = append(reverse[t], node)
-		}
-	}
-
-	radius := make(map[string]int)
-	for _, node := range nodes {
-		radius[node] = bfsCount(node, reverse)
-	}
-	return radius
 }
 
 func bfsCount(start string, graph map[string][]string) int {
@@ -316,25 +320,32 @@ func suggestCut(scc []string, graph map[string][]string) string {
 	bestScore := 0
 
 	for _, node := range scc {
-		outCount := 0
-		for _, target := range graph[node] {
-			if sccSet[target] {
-				outCount++
-			}
-		}
+		outCount := countInternalEdges(graph[node], sccSet)
 		if outCount > bestScore {
 			bestScore = outCount
-			if len(graph[node]) > 0 {
-				for _, t := range graph[node] {
-					if sccSet[t] {
-						bestEdge = node + " → " + t
-						break
-					}
-				}
-			}
+			bestEdge = firstInternalEdge(node, graph[node], sccSet)
 		}
 	}
 	return bestEdge
+}
+
+func countInternalEdges(neighbors []string, sccSet map[string]bool) int {
+	count := 0
+	for _, target := range neighbors {
+		if sccSet[target] {
+			count++
+		}
+	}
+	return count
+}
+
+func firstInternalEdge(node string, neighbors []string, sccSet map[string]bool) string {
+	for _, t := range neighbors {
+		if sccSet[t] {
+			return node + " → " + t
+		}
+	}
+	return ""
 }
 
 func minInt(a, b int) int {

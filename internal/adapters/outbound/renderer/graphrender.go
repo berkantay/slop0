@@ -100,6 +100,16 @@ func renderDSM(b *strings.Builder, packages []string, matrix [][]int) {
 
 	b.WriteString("dependency structure matrix:\n")
 
+	maxLen := dsmMaxNameLen(packages)
+	renderDSMHeader(b, packages, maxLen)
+
+	for i, name := range packages {
+		renderDSMRow(b, i, name, matrix[i], maxLen)
+	}
+	b.WriteString("\n")
+}
+
+func dsmMaxNameLen(packages []string) int {
 	maxLen := 0
 	for _, name := range packages {
 		if len(name) > maxLen {
@@ -109,35 +119,37 @@ func renderDSM(b *strings.Builder, packages []string, matrix [][]int) {
 	if maxLen > 25 {
 		maxLen = 25
 	}
+	return maxLen
+}
 
+func renderDSMHeader(b *strings.Builder, packages []string, maxLen int) {
 	header := fmt.Sprintf("%-*s", maxLen+2, "")
 	for i := range packages {
 		header += fmt.Sprintf(" %2d", i)
 	}
 	fmt.Fprintf(b, "  %s\n", header)
+}
 
-	for i, name := range packages {
-		if len(name) > maxLen {
-			name = name[len(name)-maxLen:]
-		}
-		row := fmt.Sprintf("%-*s", maxLen+2, fmt.Sprintf("%2d %s", i, name))
-		backEdge := false
-		for j, val := range matrix[i] {
-			if val > 0 {
-				row += fmt.Sprintf(" %2d", val)
-				if j < i {
-					backEdge = true
-				}
-			} else {
-				row += "  ."
-			}
-		}
-		if backEdge {
-			row += " ←"
-		}
-		fmt.Fprintf(b, "  %s\n", row)
+func renderDSMRow(b *strings.Builder, i int, name string, row []int, maxLen int) {
+	if len(name) > maxLen {
+		name = name[len(name)-maxLen:]
 	}
-	b.WriteString("\n")
+	line := fmt.Sprintf("%-*s", maxLen+2, fmt.Sprintf("%2d %s", i, name))
+	backEdge := false
+	for j, val := range row {
+		if val > 0 {
+			line += fmt.Sprintf(" %2d", val)
+			if j < i {
+				backEdge = true
+			}
+		} else {
+			line += "  ."
+		}
+	}
+	if backEdge {
+		line += " ←"
+	}
+	fmt.Fprintf(b, "  %s\n", line)
 }
 
 func shortName(fullPath string) string {
