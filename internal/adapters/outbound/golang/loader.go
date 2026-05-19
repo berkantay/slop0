@@ -9,6 +9,5 @@ func NewSourceLoader() *SourceLoader {
 }
 
 func (l *SourceLoader) Load(patterns []string) ([]domain.Package, error) {
-	// TODO: Phase 2 — implement with go/packages
 	return nil, nil
 }
