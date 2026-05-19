@@ -32,6 +32,8 @@ type Engine struct {
 	tsEntryPoints    *TypeScriptEntryPointDetector
 	tsIdiom          *TypeScriptIdiomDetector
 	tsBoundaries     *TypeScriptBoundaryDetector
+	react            *ReactDetector
+	nextjs           *NextJSDetector
 }
 
 func NewEngine() *Engine {
@@ -61,6 +63,8 @@ func NewEngine() *Engine {
 		tsEntryPoints:    &TypeScriptEntryPointDetector{},
 		tsIdiom:          &TypeScriptIdiomDetector{},
 		tsBoundaries:     &TypeScriptBoundaryDetector{},
+		react:            NewReactDetector(),
+		nextjs:           NewNextJSDetector(),
 	}
 }
 
@@ -115,6 +119,8 @@ func (e *Engine) runPatternChecks(pkgs []domain.Package, thresholds domain.Thres
 		report.PatternIssues = append(report.PatternIssues, e.pyIdiom.Detect(pkgs)...)
 	case "typescript":
 		report.PatternIssues = append(report.PatternIssues, e.tsIdiom.Detect(pkgs)...)
+		report.PatternIssues = append(report.PatternIssues, e.react.Detect(pkgs)...)
+		report.PatternIssues = append(report.PatternIssues, e.nextjs.Detect(pkgs)...)
 	}
 
 	report.PatternIssues = e.confidence.ScoreIssues(report.PatternIssues, pkgs)
