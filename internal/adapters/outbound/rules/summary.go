@@ -88,10 +88,17 @@ func summarizeHotspots(hotspots []domain.Hotspot) []string {
 func summarizeRoles(metrics []domain.TypeMetrics) map[string]int {
 	counts := make(map[string]int)
 	for _, m := range metrics {
-		if m.Role != domain.RoleUnknown {
-			counts[m.Role.String()]++
+		if m.LCOM4 > 1 {
+			counts["low-cohesion"]++
+		}
+		if m.HasExternalDep {
+			counts["external-dep"]++
+		}
+		if m.ImplementsCount > 0 {
+			counts["implements"]++
 		}
 	}
+	counts["total"] = len(metrics)
 	return counts
 }
 

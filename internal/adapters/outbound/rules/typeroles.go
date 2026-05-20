@@ -72,64 +72,19 @@ func collectPkgTypeMetrics(pkg *packages.Package, agg *typeAggregates) []domain.
 		}
 
 		key := pkg.PkgPath + "." + name
-		m := roleMetrics{agg.fanIn[key], agg.fanOut[key], agg.fieldCounts[key], agg.methodCounts[key], agg.implCounts[key], agg.externalDeps[key]}
 		metrics = append(metrics, domain.TypeMetrics{
-			Name:        name,
-			Package:     pkg.PkgPath,
-			Role:        classifyRole(m),
-			FanIn:       m.fanIn,
-			FanOut:      m.fanOut,
-			FieldCount:  m.fields,
-			MethodCount: m.methods,
-			LCOM4:       agg.lcom4[key],
+			Name:            name,
+			Package:         pkg.PkgPath,
+			FanIn:           agg.fanIn[key],
+			FanOut:          agg.fanOut[key],
+			FieldCount:      agg.fieldCounts[key],
+			MethodCount:     agg.methodCounts[key],
+			ImplementsCount: agg.implCounts[key],
+			HasExternalDep:  agg.externalDeps[key],
+			LCOM4:           agg.lcom4[key],
 		})
 	}
 	return metrics
-}
-
-type roleMetrics struct {
-	fanIn, fanOut, fields, methods, impls int
-	hasExtDep                             bool
-}
-
-func classifyRole(m roleMetrics) domain.TypeRole {
-
-	if isDataHolder(m) {
-		return domain.RoleDataHolder
-	}
-	if isRepository(m) {
-		return domain.RoleRepository
-	}
-	if isBoundary(m) {
-		return domain.RoleBoundary
-	}
-	if isOrchestrator(m) {
-		return domain.RoleOrchestrator
-	}
-	if isTransformer(m) {
-		return domain.RoleTransformer
-	}
-	return domain.RoleUnknown
-}
-
-func isDataHolder(m roleMetrics) bool {
-	return m.fields >= 3 && m.fanOut <= 1 && m.impls == 0
-}
-
-func isRepository(m roleMetrics) bool {
-	return m.impls > 0 && m.hasExtDep && m.fanOut <= 3
-}
-
-func isBoundary(m roleMetrics) bool {
-	return m.fanIn <= 2 && m.fanOut >= 2 && m.fields >= 1 && m.impls == 0
-}
-
-func isOrchestrator(m roleMetrics) bool {
-	return m.impls > 0 && m.fanOut >= 2 && !m.hasExtDep
-}
-
-func isTransformer(m roleMetrics) bool {
-	return m.fields == 0 && m.fanOut <= 1 && m.methods > 0
 }
 
 func computeFanInOut(pkgs []*packages.Package) (map[string]int, map[string]int) {
@@ -517,16 +472,16 @@ func (c *TypeRoleClassifier) ClassifyFromLoaded(domainPkgs []domain.Package, pkg
 			}
 
 			key := pkg.PkgPath + "." + name
-			m := roleMetrics{fanIn[key], fanOut[key], fieldCounts[key], methodCounts[key], implCounts[key], externalDeps[key]}
 			metrics = append(metrics, domain.TypeMetrics{
-				Name:        name,
-				Package:     pkg.PkgPath,
-				Role:        classifyRole(m),
-				FanIn:       m.fanIn,
-				FanOut:      m.fanOut,
-				FieldCount:  m.fields,
-				MethodCount: m.methods,
-				LCOM4:       lcom4[key],
+				Name:            name,
+				Package:         pkg.PkgPath,
+				FanIn:           fanIn[key],
+				FanOut:          fanOut[key],
+				FieldCount:      fieldCounts[key],
+				MethodCount:     methodCounts[key],
+				ImplementsCount: implCounts[key],
+				HasExternalDep:  externalDeps[key],
+				LCOM4:           lcom4[key],
 			})
 		}
 	}

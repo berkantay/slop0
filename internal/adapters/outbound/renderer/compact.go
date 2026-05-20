@@ -276,40 +276,25 @@ func (r *CompactRenderer) renderPkgMetrics(b *strings.Builder, metrics []domain.
 }
 
 func (r *CompactRenderer) renderTypeRoles(b *strings.Builder, metrics []domain.TypeMetrics) {
-	b.WriteString("=== TYPE ROLES ===\n\n")
+	b.WriteString("=== TYPE GRAPH POSITIONS ===\n\n")
 
-	grouped := make(map[domain.TypeRole][]domain.TypeMetrics)
-	for _, m := range metrics {
-		if m.Role == domain.RoleUnknown {
-			continue
+	for _, t := range metrics {
+		lcom := ""
+		if t.LCOM4 > 1 {
+			lcom = fmt.Sprintf(" LCOM4=%d", t.LCOM4)
 		}
-		grouped[m.Role] = append(grouped[m.Role], m)
-	}
-
-	order := []domain.TypeRole{
-		domain.RoleDataHolder,
-		domain.RoleOrchestrator,
-		domain.RoleRepository,
-		domain.RoleBoundary,
-		domain.RoleTransformer,
-	}
-
-	for _, role := range order {
-		types := grouped[role]
-		if len(types) == 0 {
-			continue
+		ext := ""
+		if t.HasExternalDep {
+			ext = " ext-dep"
 		}
-		fmt.Fprintf(b, "%s (%d):\n", role, len(types))
-		for _, t := range types {
-			lcom := ""
-			if t.LCOM4 > 1 {
-				lcom = fmt.Sprintf(" LCOM4=%d (consider splitting)", t.LCOM4)
-			}
-			fmt.Fprintf(b, "  %s.%s  fan-in:%d fan-out:%d fields:%d methods:%d%s\n",
-				domain.ShortPkgName(t.Package), t.Name, t.FanIn, t.FanOut, t.FieldCount, t.MethodCount, lcom)
+		impl := ""
+		if t.ImplementsCount > 0 {
+			impl = fmt.Sprintf(" impl:%d", t.ImplementsCount)
 		}
-		b.WriteString("\n")
+		fmt.Fprintf(b, "  %s.%s  in:%d out:%d fields:%d methods:%d%s%s%s\n",
+			domain.ShortPkgName(t.Package), t.Name, t.FanIn, t.FanOut, t.FieldCount, t.MethodCount, impl, ext, lcom)
 	}
+	b.WriteString("\n")
 }
 
 func shortenRefs(refs []string) []string {

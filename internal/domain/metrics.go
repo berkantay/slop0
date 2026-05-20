@@ -1,54 +1,26 @@
 package domain
 
 type PackageMetrics struct {
-	Path         string
-	Ca           int     // afferent coupling — who depends on me
-	Ce           int     // efferent coupling — who do I depend on
-	Instability  float64 // Ce / (Ca + Ce), 0=stable 1=unstable
-	Abstractness float64 // interfaces / total types
-	Distance     float64 // |A + I - 1|, 0=ideal
-	TypeCount    int
+	Path           string
+	Ca             int     // afferent coupling — who depends on me
+	Ce             int     // efferent coupling — who do I depend on
+	Instability    float64 // Ce / (Ca + Ce), 0=stable 1=unstable
+	Abstractness   float64 // interfaces / total types
+	Distance       float64 // |A + I - 1|, 0=ideal
+	TypeCount      int
 	InterfaceCount int
 }
 
-type TypeRole int
-
-const (
-	RoleUnknown TypeRole = iota
-	RoleDataHolder
-	RoleRepository
-	RoleOrchestrator
-	RoleBoundary
-	RoleTransformer
-)
-
-func (r TypeRole) String() string {
-	switch r {
-	case RoleDataHolder:
-		return "data-holder"
-	case RoleRepository:
-		return "repository"
-	case RoleOrchestrator:
-		return "orchestrator"
-	case RoleBoundary:
-		return "boundary"
-	case RoleTransformer:
-		return "transformer"
-	default:
-		return "unknown"
-	}
-}
-
 type TypeMetrics struct {
-	Name       string
-	Package    string
-	Role       TypeRole
-	FanIn      int
-	FanOut     int
-	FieldCount int
+	Name        string
+	Package     string
+	FanIn       int
+	FanOut      int
+	FieldCount  int
 	MethodCount int
-	LCOM4      int // connected components in method-field graph, >1 = should split
-	Confidence float64
+	ImplementsCount int
+	HasExternalDep  bool
+	LCOM4       int
 }
 
 type Confidence float64

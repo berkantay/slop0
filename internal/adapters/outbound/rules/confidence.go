@@ -186,11 +186,11 @@ func (s *ConfidenceScorer) scorePortAdapter(p domain.DesignPattern, usageSites m
 
 	var portPkg, adapterPkg, adapterType, portType string
 	for _, part := range p.Participants {
-		if part.Role == "port" {
+		if part.Role == "abstraction" {
 			portPkg = part.Package
 			portType = part.Type
 		}
-		if part.Role == "adapter" {
+		if part.Role == "implementation" {
 			adapterPkg = part.Package
 			adapterType = part.Type
 		}
