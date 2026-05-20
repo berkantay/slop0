@@ -39,6 +39,8 @@ type Engine struct {
 	graphAnalyzer    *GraphAnalyzer
 	django           *DjangoDetector
 	fastapi          *FastAPIDetector
+	codesmells       *CodeSmellDetector
+	astSmells        *ASTSmellDetector
 }
 
 func NewEngine() *Engine {
@@ -75,6 +77,8 @@ func NewEngine() *Engine {
 		graphAnalyzer:    &GraphAnalyzer{},
 		django:           &DjangoDetector{},
 		fastapi:          &FastAPIDetector{},
+		codesmells:       &CodeSmellDetector{},
+		astSmells:        NewASTSmellDetector(),
 	}
 }
 
@@ -122,6 +126,8 @@ func (e *Engine) runPatternChecks(pkgs []domain.Package, thresholds domain.Thres
 
 	report.PatternIssues = append(report.PatternIssues, e.security.Detect(pkgs)...)
 	report.PatternIssues = append(report.PatternIssues, e.codeQuality.Detect(pkgs)...)
+	report.PatternIssues = append(report.PatternIssues, e.codesmells.Detect(pkgs)...)
+	report.PatternIssues = append(report.PatternIssues, e.astSmells.Detect(pkgs)...)
 
 	lang := detectProjectLang(pkgs)
 
