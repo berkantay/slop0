@@ -36,6 +36,10 @@ func (d *NextJSDetector) Detect(pkgs []domain.Package) []domain.PatternIssue {
 	issues = append(issues, detectMissingLoadingUI(routeDirs, pkgs)...)
 	issues = append(issues, detectMissingNotFound(routeDirs)...)
 	issues = append(issues, detectMissingMetadata(pkgs, d.parser)...)
+	issues = append(issues, detectMissingGenerateStaticParams(pkgs, d.parser)...)
+	issues = append(issues, detectServerActionWithoutValidation(pkgs, d.parser)...)
+	issues = append(issues, detectMissingSuspenseBoundary(pkgs, d.parser)...)
+	issues = append(issues, detectMissingGlobalError(routeDirs)...)
 
 	for _, pkg := range pkgs {
 		for _, fn := range pkg.Functions {
@@ -543,4 +547,251 @@ func findJSXAttributeValue(element *sitter.Node, src []byte, attrName string) st
 		}
 	}
 	return ""
+}
+
+func detectMissingGenerateStaticParams(pkgs []domain.Package, parser *sitter.Parser) []domain.PatternIssue {
+	var issues []domain.PatternIssue
+
+	for _, pkg := range pkgs {
+		if !isDynamicRoute(pkg.Path) {
+			continue
+		}
+
+		for _, fn := range pkg.Functions {
+			if !isPageFile(fn.File) {
+				continue
+			}
+
+			hasGSP := fileHasExport(fn.File, parser, "generateStaticParams")
+			if !hasGSP {
+				issues = append(issues, domain.PatternIssue{
+					Category:  "nextjs/missing-generate-static-params",
+					Dominant:  "dynamic route without generateStaticParams — page cannot be statically generated at build time",
+					Violation: fmt.Sprintf("%s: dynamic route missing generateStaticParams", pkg.Path),
+					Locations: []domain.Location{{File: fn.File, Line: 1}},
+				})
+			}
+			break
+		}
+	}
+
+	return issues
+}
+
+func detectServerActionWithoutValidation(pkgs []domain.Package, parser *sitter.Parser) []domain.PatternIssue {
+	var issues []domain.PatternIssue
+
+	for _, pkg := range pkgs {
+		for _, fn := range pkg.Functions {
+			if fn.File == "" {
+				continue
+			}
+
+			src, err := os.ReadFile(fn.File)
+			if err != nil {
+				continue
+			}
+
+			tree, err := parser.ParseCtx(context.Background(), nil, src)
+			if err != nil {
+				continue
+			}
+
+			root := tree.RootNode()
+			if !hasDirective(root, src, "use server") {
+				continue
+			}
+
+			issues = append(issues, checkServerActionsForValidation(root, src, fn.File, pkg.Path)...)
+			break
+		}
+	}
+
+	return issues
+}
+
+func checkServerActionsForValidation(root *sitter.Node, src []byte, file, modPath string) []domain.PatternIssue {
+	var issues []domain.PatternIssue
+	fname := filepath.Base(file)
+
+	walkTS(root, func(node *sitter.Node) {
+		if node.Type() != "function_declaration" && node.Type() != "export_statement" {
+			return
+		}
+
+		walkTS(node, func(fn *sitter.Node) {
+			if fn.Type() != "function_declaration" {
+				return
+			}
+
+			name := ""
+			nameNode := fn.ChildByFieldName("name")
+			if nameNode != nil {
+				name = tsNodeText(nameNode, src)
+			}
+
+			if !isAsyncFunction(fn) {
+				return
+			}
+
+			body := fn.ChildByFieldName("body")
+			if body == nil {
+				return
+			}
+
+			hasValidation := bodyContainsValidation(body, src)
+			hasFormData := fnTakesFormData(fn, src)
+
+			if hasFormData && !hasValidation {
+				issues = append(issues, domain.PatternIssue{
+					Category:  "nextjs/server-action-no-validation",
+					Dominant:  "server action receives FormData without validation — use zod/schema validation",
+					Violation: fmt.Sprintf("%s: server action %s has no input validation", modPath, name),
+					Locations: []domain.Location{{File: fname, Line: int(fn.StartPoint().Row) + 1}},
+				})
+			}
+		})
+	})
+
+	return issues
+}
+
+func detectMissingSuspenseBoundary(pkgs []domain.Package, parser *sitter.Parser) []domain.PatternIssue {
+	var issues []domain.PatternIssue
+
+	for _, pkg := range pkgs {
+		for _, fn := range pkg.Functions {
+			if !isPageFile(fn.File) && !isLayoutFile(fn.File) {
+				continue
+			}
+
+			src, err := os.ReadFile(fn.File)
+			if err != nil {
+				continue
+			}
+
+			tree, err := parser.ParseCtx(context.Background(), nil, src)
+			if err != nil {
+				continue
+			}
+
+			root := tree.RootNode()
+			if hasDirective(root, src, "use client") {
+				continue
+			}
+
+			hasAsync := fileHasAsyncComponent(root, src)
+			hasSuspense := fileContainsImport(root, src, "Suspense")
+
+			if hasAsync && !hasSuspense {
+				issues = append(issues, domain.PatternIssue{
+					Category:  "nextjs/missing-suspense",
+					Dominant:  "async server component without Suspense boundary — users see blank screen during data fetch",
+					Violation: fmt.Sprintf("%s: async component without Suspense", pkg.Path),
+					Locations: []domain.Location{{File: fn.File, Line: 1}},
+				})
+			}
+			break
+		}
+	}
+
+	return issues
+}
+
+func detectMissingGlobalError(routeDirs map[string][]string) []domain.PatternIssue {
+	for dir, files := range routeDirs {
+		if filepath.Base(dir) != "app" {
+			continue
+		}
+		hasGlobalError := containsFile(files, "global-error.tsx") || containsFile(files, "global-error.ts") ||
+			containsFile(files, "global-error.jsx") || containsFile(files, "global-error.js")
+		if !hasGlobalError {
+			return []domain.PatternIssue{{
+				Category:  "nextjs/missing-global-error",
+				Dominant:  "missing app/global-error.tsx — uncaught errors have no fallback UI",
+				Violation: "missing global-error.tsx in app root",
+				Locations: []domain.Location{{File: dir}},
+			}}
+		}
+	}
+	return nil
+}
+
+func isDynamicRoute(path string) bool {
+	return strings.Contains(path, "[") && strings.Contains(path, "]")
+}
+
+func isLayoutFile(file string) bool {
+	base := filepath.Base(file)
+	return base == "layout.tsx" || base == "layout.ts"
+}
+
+func isAsyncFunction(fn *sitter.Node) bool {
+	for i := 0; i < int(fn.ChildCount()); i++ {
+		child := fn.Child(i)
+		if child != nil && child.Type() == "async" {
+			return true
+		}
+	}
+	return false
+}
+
+func fnTakesFormData(fn *sitter.Node, src []byte) bool {
+	params := fn.ChildByFieldName("parameters")
+	if params == nil {
+		return false
+	}
+	text := tsNodeText(params, src)
+	return strings.Contains(text, "FormData") || strings.Contains(text, "formData")
+}
+
+func bodyContainsValidation(body *sitter.Node, src []byte) bool {
+	found := false
+	walkTS(body, func(node *sitter.Node) {
+		if node.Type() == "call_expression" {
+			fn := node.ChildByFieldName("function")
+			if fn == nil {
+				return
+			}
+			text := tsNodeText(fn, src)
+			if strings.Contains(text, "safeParse") || strings.Contains(text, "parse") ||
+				strings.Contains(text, "validate") || strings.Contains(text, "Validate") ||
+				strings.Contains(text, "schema") || strings.Contains(text, "Schema") {
+				found = true
+			}
+		}
+	})
+	return found
+}
+
+func fileHasAsyncComponent(root *sitter.Node, src []byte) bool {
+	found := false
+	walkTS(root, func(node *sitter.Node) {
+		if node.Type() == "export_statement" {
+			walkTS(node, func(child *sitter.Node) {
+				if child.Type() == "function_declaration" && isAsyncFunction(child) {
+					found = true
+				}
+			})
+		}
+	})
+	return found
+}
+
+func fileHasExport(file string, parser *sitter.Parser, exportName string) bool {
+	src, err := os.ReadFile(file)
+	if err != nil {
+		return false
+	}
+	tree, err := parser.ParseCtx(context.Background(), nil, src)
+	if err != nil {
+		return false
+	}
+	found := false
+	walkTS(tree.RootNode(), func(node *sitter.Node) {
+		if node.Type() == "export_statement" && strings.Contains(tsNodeText(node, src), exportName) {
+			found = true
+		}
+	})
+	return found
 }
