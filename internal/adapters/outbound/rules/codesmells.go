@@ -112,23 +112,45 @@ func (d *CodeSmellDetector) detectMiddleMan(pkgs []domain.Package) []domain.Patt
 
 	for _, pkg := range pkgs {
 		for _, fn := range pkg.Functions {
-			if isMiddleManExcluded(fn.Name) {
-				continue
-			}
-			if len(fn.Calls) != 1 || len(fn.CalledBy) != 1 {
+			if !isRealMiddleMan(fn, pkg.Path) {
 				continue
 			}
 			callee := lastSegment(fn.Calls[0])
-			caller := lastSegment(fn.CalledBy[0])
 			issues = append(issues, domain.PatternIssue{
 				Category:  "smell/middle-man",
-				Dominant:  "function only delegates — consider inlining",
-				Violation: fmt.Sprintf("%s is a middle man — only delegates to %s, called only by %s", fn.Name, callee, caller),
+				Dominant:  "function only delegates across package boundary — callers could call target directly",
+				Violation: fmt.Sprintf("%s is a middle man — %d callers all delegate through it to %s", fn.Name, len(fn.CalledBy), callee),
 				Locations: locationFromFunc(fn),
 			})
 		}
 	}
 	return issues
+}
+
+func isRealMiddleMan(fn domain.Function, pkgPath string) bool {
+	if isMiddleManExcluded(fn.Name) {
+		return false
+	}
+	if len(fn.Calls) != 1 || len(fn.CalledBy) < 2 {
+		return false
+	}
+
+	calleeInSamePkg := strings.HasPrefix(fn.Calls[0], pkgPath)
+	callerInSamePkg := strings.HasPrefix(fn.CalledBy[0], pkgPath)
+
+	if calleeInSamePkg && callerInSamePkg {
+		return false
+	}
+
+	calleeName := lastSegment(fn.Calls[0])
+	if strings.Contains(strings.ToLower(fn.Name), strings.ToLower(calleeName)) {
+		return false
+	}
+	if strings.Contains(strings.ToLower(calleeName), strings.ToLower(fn.Name)) {
+		return false
+	}
+
+	return true
 }
 
 func isMiddleManExcluded(name string) bool {
@@ -348,6 +370,13 @@ func buildProjectPkgSet(pkgs []domain.Package) map[string]bool {
 		s[pkg.Path] = true
 	}
 	return s
+}
+
+func samePkg(qualifiedPkg, fullPkgPath string) bool {
+	if qualifiedPkg == fullPkgPath {
+		return true
+	}
+	return strings.HasSuffix(fullPkgPath, qualifiedPkg) || strings.HasSuffix(qualifiedPkg, fullPkgPath)
 }
 
 func extractPkgFromQualified(name string) string {
